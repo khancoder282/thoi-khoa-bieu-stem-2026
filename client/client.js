@@ -30,6 +30,10 @@ const ID = HOST;
 const SHOT_SEC = Number(cfg.screenshotIntervalSec || 30);
 const ACT_SEC = Number(cfg.activityIntervalSec || 5);
 const QUALITY = Number(cfg.jpegQuality || 40);
+const LIVE_FPS = Number(cfg.liveFps || 8);
+const LIVE_QUALITY = Number(cfg.liveJpegQuality || 50);
+const LIVE_W = Number(cfg.liveMaxWidth || 1280); // live frames are downscaled to fit LIVE_W x LIVE_H (720p)
+const LIVE_H = Number(cfg.liveMaxHeight || 720);
 
 // ---- Visible notice for the employee (runs in the open, not hidden) ----
 console.log('==================================================');
@@ -47,6 +51,7 @@ if (!fs.existsSync(TMP)) { try { fs.mkdirSync(os.tmpdir(), { recursive: true });
 const PS_SHOT = path.join(TMP, 'mon_shot.ps1');
 const PS_ACT = path.join(TMP, 'mon_act.ps1');
 const PS_POST = path.join(TMP, 'mon_post.ps1');
+const PS_LIVE = path.join(TMP, 'mon_live.ps1');
 
 fs.writeFileSync(PS_SHOT, `param([string]$Path,[int]$Quality=40)
 # Make the process DPI-aware so CopyFromScreen captures the full physical resolution (not the scaled/logical one)
@@ -135,6 +140,77 @@ try {
 } catch [System.Net.WebException] {
   if ($_.Exception.Response) { [Console]::Out.Write([string][int]$_.Exception.Response.StatusCode + [char]1) } else { [Console]::Out.Write('0' + [char]1) }
 } catch { [Console]::Out.Write('0' + [char]1) }
+`);
+
+// Live view: ONE long-running PowerShell that loops capture -> downscale -> JPEG in memory -> POST raw bytes.
+// Avoids a powershell.exe spawn + Add-Type compile per frame (the old ~1 fps bottleneck). Uploads via WebClient
+// (system proxy + keep-alive). Exits on its own when the server answers live:false or keeps failing.
+fs.writeFileSync(PS_LIVE, `param([string]$Url,[string]$Token,[int]$Fps=8,[int]$Quality=50,[int]$MaxW=1280,[int]$MaxH=720)
+try {
+  Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public class Dpi { [DllImport("user32.dll")] public static extern bool SetProcessDPIAware(); }
+"@
+  [void][Dpi]::SetProcessDPIAware()
+} catch {}
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
+[Net.ServicePointManager]::Expect100Continue = $false
+$enc = [System.Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() | Where-Object { $_.MimeType -eq 'image/jpeg' }
+$ep = New-Object System.Drawing.Imaging.EncoderParameters(1)
+$ep.Param[0] = New-Object System.Drawing.Imaging.EncoderParameter([System.Drawing.Imaging.Encoder]::Quality, [long]$Quality)
+$md5 = $null
+try { $md5 = [System.Security.Cryptography.MD5]::Create() } catch {} # may be blocked by FIPS policy -> just send every frame
+$wc = New-Object System.Net.WebClient
+$frameMs = [int](1000 / [Math]::Max(1, $Fps))
+$clock = [System.Diagnostics.Stopwatch]::StartNew()
+$full = $null; $small = $null; $gFull = $null; $gSmall = $null
+$lastHash = ''; $lastSent = -100000; $fails = 0
+while ($true) {
+  $t0 = $clock.ElapsedMilliseconds
+  $b = [System.Windows.Forms.SystemInformation]::VirtualScreen
+  if (-not $full -or $full.Width -ne $b.Width -or $full.Height -ne $b.Height) {
+    if ($gFull) { $gFull.Dispose(); $full.Dispose(); $gSmall.Dispose(); $small.Dispose() }
+    $s = [Math]::Min(1.0, [Math]::Min($MaxW / $b.Width, $MaxH / $b.Height))
+    $full = New-Object System.Drawing.Bitmap($b.Width, $b.Height)
+    $gFull = [System.Drawing.Graphics]::FromImage($full)
+    $small = New-Object System.Drawing.Bitmap([Math]::Max(1, [int]($b.Width * $s)), [Math]::Max(1, [int]($b.Height * $s)))
+    $gSmall = [System.Drawing.Graphics]::FromImage($small)
+    $gSmall.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::Bilinear
+  }
+  $ok = $true
+  try { $gFull.CopyFromScreen($b.X, $b.Y, 0, 0, $b.Size) } catch { $ok = $false } # fails while the screen is locked
+  if ($ok) {
+    $gSmall.DrawImage($full, 0, 0, $small.Width, $small.Height)
+    $ms = New-Object System.IO.MemoryStream
+    $small.Save($ms, $enc, $ep)
+    $bytes = $ms.ToArray(); $ms.Dispose()
+    $hash = [string]$t0
+    if ($md5) { $hash = [BitConverter]::ToString($md5.ComputeHash($bytes)) }
+    # Skip unchanged frames, but still send one every 2s so the live:false answer arrives
+    if ($hash -ne $lastHash -or ($t0 - $lastSent) -ge 2000) {
+      try {
+        $wc.Headers['Content-Type'] = 'image/jpeg'
+        if ($Token) { $wc.Headers['x-agent-token'] = $Token }
+        $resp = [System.Text.Encoding]::UTF8.GetString($wc.UploadData($Url, 'POST', $bytes))
+        $lastHash = $hash; $lastSent = $t0; $fails = 0
+        if ($resp -like '*"live":false*') { break }
+      } catch {
+        $fails++
+        if ($fails -ge 10) { break }
+        Start-Sleep -Milliseconds 1000
+      }
+    }
+  } else {
+    $fails++
+    if ($fails -ge 60) { break }
+    Start-Sleep -Milliseconds 1000
+  }
+  $wait = $frameMs - ($clock.ElapsedMilliseconds - $t0)
+  if ($wait -gt 0) { Start-Sleep -Milliseconds $wait }
+}
 `);
 
 function runPS(args) {
@@ -272,34 +348,29 @@ async function captureScreenshot() {
   }
 }
 
-// ---- On-demand live view: when someone is watching, stream ~1 fps to /ingest/live (NOT saved on server) ----
-let liveTimer = null;
-let liveBusy = false;
+// ---- On-demand live view: when someone is watching, stream 720p JPEG to /ingest/live (NOT saved on server) ----
+let liveProc = null;
 function handleLive(body) {
   let want = false;
   try { want = !!JSON.parse(body || '{}').live; } catch {}
-  if (want && !liveTimer) {
-    console.log(`[${nowTime()}] Live view started (1 fps).`);
-    liveTimer = setInterval(liveFrame, 1000);
-  } else if (!want && liveTimer) {
-    clearInterval(liveTimer); liveTimer = null;
-    console.log(`[${nowTime()}] Live view stopped.`);
-  }
+  if (want && !liveProc) startLive();
+  else if (!want && liveProc) { try { liveProc.kill(); } catch {} }
 }
-async function liveFrame() {
-  if (liveBusy) return; // skip if the previous frame is still capturing/sending
-  liveBusy = true;
-  const tmpImg = path.join(TMP, `live_${Date.now()}.jpg`);
+function startLive() {
+  const url = `${SERVER}/ingest/live?id=${encodeURIComponent(ID)}`;
+  let p;
   try {
-    await runPS([PS_SHOT, '-Path', tmpImg, '-Quality', String(QUALITY)]);
-    if (fs.existsSync(tmpImg)) {
-      const data = fs.readFileSync(tmpImg).toString('base64');
-      const r = await postJson('/ingest/live', { id: ID, time: nowTime(), data });
-      fs.unlink(tmpImg, () => {});
-      handleLive(r.body); // stop quickly (within ~1s) once the viewer closes
-    }
-  } catch {} finally { liveBusy = false; }
+    p = spawn('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', PS_LIVE,
+      '-Url', url, '-Token', TOKEN, '-Fps', String(LIVE_FPS), '-Quality', String(LIVE_QUALITY),
+      '-MaxW', String(LIVE_W), '-MaxH', String(LIVE_H)], { windowsHide: true, stdio: 'ignore' });
+  } catch (e) { console.log('Live view error:', e.message); return; }
+  liveProc = p;
+  console.log(`[${nowTime()}] Live view started (${LIVE_FPS} fps, max ${LIVE_W}x${LIVE_H}).`);
+  const done = () => { if (liveProc === p) { liveProc = null; console.log(`[${nowTime()}] Live view stopped.`); } };
+  p.on('exit', done);
+  p.on('error', done);
 }
+process.on('exit', () => { if (liveProc) try { liveProc.kill(); } catch {} });
 
 // ---- Immediate registration heartbeat (independent of PowerShell) ----
 (async () => {

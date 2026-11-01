@@ -59,12 +59,12 @@
   <!-- Modal xem anh lon -->
   <div id="modal" class="modal hidden"><img id="modalImg" src="" alt="" /></div>
 
-  <!-- Modal xem truc tiep (1 fps, khong luu) -->
+  <!-- Modal xem truc tiep (720p ~8 fps, khong luu) -->
   <div id="liveModal" class="modal hidden">
     <div class="livebox" onclick="event.stopPropagation()">
       <div class="livehead">
         <span id="liveTitle">Xem trực tiếp</span>
-        <span class="livedot">● LIVE 1fps · không lưu</span>
+        <span id="liveFps" class="livedot">● LIVE · không lưu</span>
         <button id="liveClose" class="liveclose">✕ Đóng</button>
       </div>
       <div class="livewrap"><img id="liveImg" class="liveimg" alt="live" style="display:none" /><div id="liveStatus" class="livestatus">Đang kết nối tới máy…</div></div>

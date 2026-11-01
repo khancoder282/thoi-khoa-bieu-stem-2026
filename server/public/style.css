@@ -105,3 +105,12 @@ button:hover { background: #2a303b; }
 .rtlbtns { display: flex; gap: 8px; }
 .rliveview { color: #f87171; }
 .rliveview:hover { border-color: #f87171; }
+
+/* Nhat ky tung dong trong Bao cao: dong khop timeline to dam */
+.rloghead { margin: 14px 0 6px; font-size: 13px; font-weight: 600; color: #c3cad6; }
+.rloghead span { font-weight: 400; color: #6b7280; font-size: 12px; }
+.rlog { position: relative; max-height: 260px; overflow-y: auto; background: #0b0d11; border: 1px solid #262a33; border-radius: 10px; padding: 4px 0; font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+.rlogline { padding: 2px 10px; color: #5b6472; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; border-left: 3px solid transparent; }
+.rlogline:hover { color: #9aa4b2; }
+.rlogline.cur { color: #f3f4f6; font-weight: 700; background: #1b2230; border-left-color: #4ade80; }
+.rlog .empty { padding: 10px; margin: 0; }

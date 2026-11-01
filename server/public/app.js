@@ -20,6 +20,7 @@ socket.on('activity', (a) => {
   c.online = true;
   state.set(a.id, c);
   render();
+  if (typeof reportOnActivity === 'function') reportOnActivity(a);
 });
 
 socket.on('screenshot', (s) => {
@@ -44,7 +45,7 @@ function render() {
     const shot = c.lastShot
       ? `<img class="shot" src="${c.lastShot}?t=${encodeURIComponent(c.lastShotTime || '0')}" alt="screenshot" />`
       : `<div class="noshot">Chưa có ảnh</div>`;
-    return `<div class="card clickable" data-card-client="${esc(c.id)}" title="Bấm để xem trực tiếp (1 fps)">
+    return `<div class="card clickable" data-card-client="${esc(c.id)}" title="Bấm để xem trực tiếp (720p)">
       ${shot}
       <div class="meta">
         <div class="name"><span class="dot ${c.online ? 'on' : 'off'}"></span>${esc(c.name)} <small style="color:#6b7280">${esc(c.host || '')}</small></div>
@@ -90,7 +91,7 @@ document.body.addEventListener('click', (e) => {
   if (e.target === liveModal) closeLiveView();
 });
 
-// ---- Xem truc tiep 1 fps (khong luu): dung chung cho modal va khung trai Bao cao ----
+// ---- Xem truc tiep 720p ~8 fps (khong luu): dung chung cho modal va khung trai Bao cao ----
 const liveModal = document.getElementById('liveModal');
 let liveModalClient = null;
 let liveSub = null; // { client, target: 'modal' | 'report', keepalive }
@@ -109,12 +110,16 @@ function refreshLiveSub() {
   const ping = () => fetch(`/api/live/start/${encodeURIComponent(d.client)}`, { method: 'POST' }).catch(() => {});
   ping();
   liveSub = { client: d.client, target: d.target, keepalive: setInterval(ping, 4000) };
+  socket.emit('live-sub', d.client);
 }
 function stopLive() {
   if (!liveSub) return;
   clearInterval(liveSub.keepalive);
   const cl = liveSub.client;
   liveSub = null;
+  liveTimes = [];
+  document.getElementById('liveFps').textContent = '● LIVE · không lưu';
+  socket.emit('live-sub', null);
   fetch(`/api/live/stop/${encodeURIComponent(cl)}`, { method: 'POST' }).catch(() => {});
 }
 function openLiveView(clientId) {
@@ -133,14 +138,28 @@ function closeLiveView() {
 }
 document.getElementById('liveClose').addEventListener('click', closeLiveView);
 
+socket.on('connect', () => { if (liveSub) socket.emit('live-sub', liveSub.client); }); // rejoin the room after a reconnect
+
+// Frames arrive as binary JPEG (ArrayBuffer) -> show via a Blob URL, freeing the previous one
+let liveUrl = null;
+let liveTimes = []; // arrival times of recent frames, for the fps label
+function liveSrc(data) {
+  const old = liveUrl;
+  liveUrl = URL.createObjectURL(new Blob([data], { type: 'image/jpeg' }));
+  if (old) setTimeout(() => URL.revokeObjectURL(old), 1000);
+  return liveUrl;
+}
 socket.on('live', (f) => {
   if (!liveSub || f.id !== liveSub.client) return;
+  const now = Date.now();
+  liveTimes = liveTimes.filter((t) => t > now - 2000).concat(now);
+  document.getElementById('liveFps').textContent = `● LIVE ${(liveTimes.length / 2).toFixed(1)} fps · không lưu`;
   if (liveSub.target === 'modal') {
     const img = document.getElementById('liveImg'), st = document.getElementById('liveStatus');
-    img.src = 'data:image/jpeg;base64,' + f.data; img.style.display = 'block'; st.style.display = 'none';
+    img.src = liveSrc(f.data); img.style.display = 'block'; st.style.display = 'none';
   } else {
     const img = document.getElementById('rImg'), no = document.getElementById('rNoshot'), t = document.getElementById('rShotTime');
-    if (img) { img.src = 'data:image/jpeg;base64,' + f.data; img.removeAttribute('data-full'); img.style.display = 'block'; if (no) no.style.display = 'none'; if (t) t.textContent = (f.time || '') + ' (trực tiếp)'; }
+    if (img) { img.src = liveSrc(f.data); img.removeAttribute('data-full'); img.style.display = 'block'; if (no) no.style.display = 'none'; if (t) t.textContent = (f.time || '') + ' (trực tiếp)'; }
   }
 });
 
@@ -234,6 +253,8 @@ function ensureSkeleton() {
             <button id="rLive" class="rlivebtn on">● Trực tiếp</button>
           </div>
         </div>
+        <div class="rloghead">Nhật ký hoạt động <span>(bấm 1 dòng để nhảy tới ảnh)</span></div>
+        <div id="rLog" class="rlog"></div>
       </div>
       <div class="rright" id="rStats"></div>
     </div>`;
@@ -244,17 +265,74 @@ function ensureSkeleton() {
     const sl = document.getElementById('rSlider');
     if (sl && n) sl.value = n - 1;
     if (n) showShot(n - 1); // placeholder ảnh mới nhất trong lúc chờ khung live
+    else setLogCur(logView.lines.length - 1);
     updateLiveBtn(); refreshLiveSub();
   });
+  document.getElementById('rLog').addEventListener('click', (e) => {
+    const el = e.target.closest('.rlogline');
+    if (!el) return;
+    const i = +el.dataset.i, l = logView.lines[i];
+    if (!l || !l.time) return;
+    viewer.realtime = false;
+    if (viewer.shots.length) { // ảnh gần nhất chụp trước (hoặc đúng) thời điểm của dòng
+      let j = viewer.shots.length - 1;
+      while (j > 0 && viewer.shots[j].time > l.time) j--;
+      document.getElementById('rSlider').value = j;
+      showShot(j);
+    }
+    setLogCur(i, false); // giữ đúng dòng vừa bấm, không cuộn
+    updateLiveBtn(); refreshLiveSub();
+  });
+}
+
+// ---- Nhat ky tung dong: to dam dong khop voi vi tri timeline ----
+const logView = { lines: [], cur: -1 }; // lines: [{ time: 'HH:MM:SS', text }]
+function logLineHtml(l, i) { return `<div class="rlogline" data-i="${i}" title="${esc(l.text)}">${esc(l.text)}</div>`; }
+function logLine(text) { const m = String(text).match(/(\d{2}:\d{2}:\d{2})/); return { time: m ? m[1] : '', text }; }
+async function loadLog(day, client) {
+  let txt = '';
+  try { const res = await fetch(`/api/logs/${day}/${encodeURIComponent(client)}.txt`); if (res.ok) txt = await res.text(); } catch {}
+  logView.lines = txt.split('\n').filter((s) => s.trim()).map(logLine);
+  logView.cur = -1;
+  document.getElementById('rLog').innerHTML = logView.lines.map(logLineHtml).join('')
+    || '<p class="empty">Không có nhật ký (ngày cũ chỉ giữ báo cáo tổng hợp).</p>';
+}
+// time = giờ của ảnh đang xem; null = trực tiếp (dòng mới nhất)
+function markLog(time) {
+  let i = logView.lines.length - 1;
+  if (time != null) while (i >= 0 && !(logView.lines[i].time && logView.lines[i].time <= time)) i--;
+  setLogCur(i);
+}
+function setLogCur(i, scroll = true) {
+  const box = document.getElementById('rLog');
+  if (!box || i === logView.cur) return;
+  const old = box.querySelector('.rlogline.cur');
+  if (old) old.classList.remove('cur');
+  logView.cur = i;
+  const el = i >= 0 ? box.querySelector(`.rlogline[data-i="${i}"]`) : null;
+  if (!el) return;
+  el.classList.add('cur');
+  if (scroll) box.scrollTop = el.offsetTop - (box.clientHeight - el.offsetHeight) / 2; // chi cuon khung log, khong cuon trang
+}
+// Dong log moi qua socket (cung dinh dang voi server.js) -> them vao cuoi, dang truc tiep thi to dam dong do
+function reportOnActivity(a) {
+  const box = document.getElementById('rLog');
+  if (!box || a.id !== viewer.client || viewer.day !== todayStr()) return;
+  if (!logView.lines.length) box.innerHTML = '';
+  const l = logLine(`[${a.time}] APP="${a.app}" | TITLE="${a.title}" | URL="${a.url || ''}" | FILE="${a.file}" | PID=${a.pid} | IDLE=${a.idleSec}s`);
+  logView.lines.push(l);
+  box.insertAdjacentHTML('beforeend', logLineHtml(l, logView.lines.length - 1));
+  if (viewer.realtime) setLogCur(logView.lines.length - 1);
 }
 function updateLiveBtn() { const b = document.getElementById('rLive'); if (b) b.classList.toggle('on', viewer.realtime); }
 function showShot(i) {
   const img = document.getElementById('rImg'), no = document.getElementById('rNoshot'), t = document.getElementById('rShotTime');
   if (!img) return;
-  if (i < 0 || i >= viewer.shots.length) { img.style.display = 'none'; no.style.display = 'flex'; if (t) t.textContent = '—'; return; }
+  if (i < 0 || i >= viewer.shots.length) { img.style.display = 'none'; no.style.display = 'flex'; if (t) t.textContent = '—'; markLog(viewer.realtime ? null : ''); return; }
   const s = viewer.shots[i];
   img.src = s.url; img.dataset.full = s.url; img.style.display = 'block'; no.style.display = 'none';
   if (t) t.textContent = s.time + (viewer.realtime ? ' (mới nhất)' : '');
+  markLog(viewer.realtime ? null : s.time);
 }
 async function loadShots(day, client) {
   const urls = await (await fetch(`/api/shots/${day}/${client}`)).json();
@@ -288,6 +366,7 @@ async function loadReport(showEmpty) {
   if (key !== curReportKey) {
     curReportKey = key;
     viewer.client = rClient.value; viewer.day = rDay.value;
+    await loadLog(rDay.value, rClient.value); // truoc loadShots de showShot to dam dung dong
     await loadShots(rDay.value, rClient.value);
   }
   reportLoaded = true;

@@ -219,13 +219,16 @@ app.post('/ingest/activity', checkToken, (req, res) => {
   res.json({ ok: true, live: isLiveWanted(id) });
 });
 
-// Ephemeral live frame: relay to dashboards, do NOT save to disk
-app.post('/ingest/live', checkToken, (req, res) => {
-  const b = req.body || {};
-  const id = safe(b.id);
+// Ephemeral live frame: relay to the dashboards watching this machine, do NOT save to disk.
+// New agents POST raw image/jpeg with ?id=; old agents POST JSON { id, data: base64 }.
+app.post('/ingest/live', express.raw({ type: 'image/jpeg', limit: '5mb' }), checkToken, (req, res) => {
+  const raw = Buffer.isBuffer(req.body);
+  const b = raw ? {} : (req.body || {});
+  const id = safe(raw ? req.query.id : b.id);
+  const data = raw ? req.body : Buffer.from(b.data || '', 'base64');
   const c = clients.get(id);
   if (c) c.lastSeen = Date.now();
-  io.emit('live', { id, data: b.data, time: b.time || nowTime() });
+  if (data.length) io.to('live:' + id).emit('live', { id, data, time: b.time || nowTime() });
   res.json({ ok: true, live: isLiveWanted(id) });
 });
 
@@ -331,6 +334,13 @@ app.get('/install.ps1', (req, res) => {
 // ---- Dashboard live channel ----
 io.on('connection', (socket) => {
   socket.emit('clients', [...clients.values()]);
+  // A dashboard subscribes to the live frames of one machine at a time (null = none)
+  let liveRoom = null;
+  socket.on('live-sub', (id) => {
+    if (liveRoom) socket.leave(liveRoom);
+    liveRoom = id ? 'live:' + safe(id) : null;
+    if (liveRoom) socket.join(liveRoom);
+  });
 });
 
 server.listen(PORT, () => {
