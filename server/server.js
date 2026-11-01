@@ -72,6 +72,13 @@ io.use((socket, next) => {
 const clients = new Map(); // id -> { id, name, host, lastSeen, lastShot, lastActivity, online }
 const liveWanted = new Map(); // id -> expiry ms; set while a dashboard is watching the live view
 function isLiveWanted(id) { const e = liveWanted.get(id); return !!(e && e > Date.now()); }
+let gridWantedUntil = 0; // set while a dashboard shows the live grid (all machines, small + low fps)
+// What the agent should stream: 'full' (720p, one watched machine) > 'grid' (small, every machine) > '' (nothing).
+// `live` stays a boolean meaning full, so the dashboard's existing checks keep working.
+function liveState(id) {
+  const full = isLiveWanted(id);
+  return { live: full, mode: full ? 'full' : gridWantedUntil > Date.now() ? 'grid' : '' };
+}
 
 function today() {
   const d = new Date();
@@ -228,7 +235,7 @@ app.post('/ingest/activity', checkToken, (req, res) => {
   appendEvent(id, { t: Date.now(), time: a.time, app: a.app, title: a.title, idle: idleSec, url });
   io.emit('activity', { id, ...a });
   io.emit('clients', [...clients.values()]);
-  res.json({ ok: true, live: isLiveWanted(id), agent: agentHash() });
+  res.json({ ok: true, ...liveState(id), agent: agentHash() });
 });
 
 // Ephemeral live frame (raw image/jpeg body, ?id=): relay to the dashboards watching this machine, do NOT save to disk.
@@ -237,13 +244,15 @@ app.post('/ingest/live', express.raw({ type: 'image/jpeg', limit: '5mb' }), chec
   const data = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
   const c = clients.get(id);
   if (c) c.lastSeen = Date.now();
-  if (data.length) io.to('live:' + id).emit('live', { id, data, time: nowTime() });
-  res.json({ ok: true, live: isLiveWanted(id) });
+  // Every frame goes to whoever watches this machine and to the live grid (a socket in both rooms gets it once)
+  if (data.length) io.to('live:' + id).to('grid').emit('live', { id, data, time: nowTime() });
+  res.json({ ok: true, ...liveState(id) });
 });
 
 // Dashboard turns live view on/off for a machine (Basic-Auth protected under the global middleware)
 app.post('/api/live/start/:client', (req, res) => { liveWanted.set(safe(req.params.client), Date.now() + 12000); res.json({ ok: true }); });
 app.post('/api/live/stop/:client', (req, res) => { liveWanted.delete(safe(req.params.client)); res.json({ ok: true }); });
+app.post('/api/live/grid', (req, res) => { gridWantedUntil = Date.now() + 12000; res.json({ ok: true }); });
 
 // Agents POST a raw image/jpeg body with ?id=&name=&host=&time=
 app.post('/ingest/screenshot', express.raw({ type: 'image/jpeg', limit: '25mb' }), checkToken, (req, res) => {
@@ -354,6 +363,8 @@ io.on('connection', (socket) => {
     liveRoom = id ? 'live:' + safe(id) : null;
     if (liveRoom) socket.join(liveRoom);
   });
+  // A dashboard showing the live grid subscribes to every machine's frames at once
+  socket.on('grid-sub', (on) => { if (on) socket.join('grid'); else socket.leave('grid'); });
 });
 
 server.listen(PORT, () => {

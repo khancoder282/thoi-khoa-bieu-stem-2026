@@ -25,7 +25,7 @@ header h1 { font-size: 18px; margin: 0; }
 .panel.active { display: block; }
 
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px; }
-.card { background: #171a21; border: 1px solid #262a33; border-radius: 12px; overflow: hidden; }
+.card { position: relative; background: #171a21; border: 1px solid #262a33; border-radius: 12px; overflow: hidden; }
 .card .shot { width: 100%; aspect-ratio: 16/10; object-fit: cover; background: #000; cursor: pointer; display: block; }
 .card .noshot { width: 100%; aspect-ratio: 16/10; display: flex; align-items: center; justify-content: center; color: #6b7280; background: #0b0d11; }
 .card .meta { padding: 12px 14px; }
@@ -43,9 +43,6 @@ select, button { background: #20242d; color: #e7e9ee; border: 1px solid #2b303b;
 button { cursor: pointer; }
 button:hover { background: #2a303b; }
 
-.logview { background: #0b0d11; border: 1px solid #262a33; border-radius: 10px; padding: 14px; overflow: auto; max-height: 60vh; font-size: 13px; white-space: pre-wrap; word-break: break-word; }
-.shotview { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; margin-top: 14px; }
-.shotview img { width: 100%; border-radius: 8px; border: 1px solid #262a33; cursor: pointer; }
 
 .modal { position: fixed; inset: 0; background: rgba(0,0,0,.85); display: flex; align-items: center; justify-content: center; z-index: 50; }
 .modal.hidden { display: none; }
@@ -74,8 +71,8 @@ button:hover { background: #2a303b; }
 .goreport { float: right; color: #8ab4ff; }
 .card.clickable:hover .goreport { text-decoration: underline; }
 .cardlinks { float: right; }
-.cardlinks .goreport, .cardlinks .golog { float: none; color: #8ab4ff; cursor: pointer; }
-.card.clickable:hover .golog, .card.clickable:hover .goreport { text-decoration: underline; }
+.cardlinks .goreport { float: none; color: #8ab4ff; cursor: pointer; }
+.card.clickable:hover .goreport { text-decoration: underline; }
 
 /* ---- Bao cao: viewer anh + timeline ---- */
 .rlayout { display: grid; grid-template-columns: minmax(300px, 46%) 1fr; gap: 22px; align-items: start; }
@@ -114,3 +111,4 @@ button:hover { background: #2a303b; }
 .rlogline:hover { color: #9aa4b2; }
 .rlogline.cur { color: #f3f4f6; font-weight: 700; background: #1b2230; border-left-color: #4ade80; }
 .rlog .empty { padding: 10px; margin: 0; }
+.gridlive { position: absolute; top: 8px; left: 8px; background: rgba(0,0,0,.6); color: #f87171; font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 6px; pointer-events: none; }

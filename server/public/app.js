@@ -42,7 +42,10 @@ function render() {
   empty.style.display = list.length ? 'none' : 'block';
   grid.innerHTML = list.map((c) => {
     const a = c.lastActivity || {};
-    const shot = c.lastShot
+    const g = gridFrames.get(c.id);
+    const shot = g && g.at > Date.now() - 15000
+      ? `<img class="shot" src="${g.url}" alt="live" /><span class="gridlive">● LIVE</span>`
+      : c.lastShot
       ? `<img class="shot" src="${c.lastShot}?t=${encodeURIComponent(c.lastShotTime || '0')}" alt="screenshot" />`
       : `<div class="noshot">Chưa có ảnh</div>`;
     return `<div class="card clickable" data-card-client="${esc(c.id)}" title="Bấm để xem trực tiếp (720p)">
@@ -56,7 +59,7 @@ function render() {
           <div><b>File/đường dẫn:</b> ${esc(a.file) || '—'}</div>
         </div>
         <div class="time">Cập nhật: ${esc(a.time || c.lastShotTime || '')}
-          <span class="cardlinks"><span class="golog" data-log-client="${esc(c.id)}">Xem log</span> · <span class="goreport" data-report-client="${esc(c.id)}">Báo cáo →</span></span>
+          <span class="cardlinks"><span class="goreport" data-report-client="${esc(c.id)}">Báo cáo →</span></span>
         </div>
       </div>
     </div>`;
@@ -67,9 +70,9 @@ function render() {
 function activateTab(name) {
   document.querySelectorAll('.tab').forEach((x) => x.classList.toggle('active', x.dataset.tab === name));
   document.querySelectorAll('.panel').forEach((x) => x.classList.toggle('active', x.id === name));
-  if (name === 'history') loadDays();
   if (name === 'report') loadReportDays();
   if (typeof refreshLiveSub === 'function') refreshLiveSub(); // start/stop inline live for the report tab
+  if (typeof refreshGridSub === 'function') refreshGridSub(); // live grid only while the Truc tiep tab is shown
 }
 document.querySelectorAll('.tab').forEach((t) => {
   t.addEventListener('click', () => activateTab(t.dataset.tab));
@@ -79,10 +82,8 @@ document.querySelectorAll('.tab').forEach((t) => {
 const modal = document.getElementById('modal');
 const modalImg = document.getElementById('modalImg');
 document.body.addEventListener('click', (e) => {
-  const img = e.target.closest('[data-full]') || (e.target.matches('.shotview img') ? e.target : null);
+  const img = e.target.closest('[data-full]');
   if (img) { modalImg.src = img.dataset.full || img.src; modal.classList.remove('hidden'); return; }
-  const logEl = e.target.closest('[data-log-client]');
-  if (logEl) { e.stopPropagation(); openLogFor(logEl.dataset.logClient); return; }
   const repEl = e.target.closest('[data-report-client]');
   if (repEl) { e.stopPropagation(); openReportFor(repEl.dataset.reportClient); return; }
   const card = e.target.closest('.card[data-card-client]');
@@ -138,7 +139,34 @@ function closeLiveView() {
 }
 document.getElementById('liveClose').addEventListener('click', closeLiveView);
 
-socket.on('connect', () => { if (liveSub) socket.emit('live-sub', liveSub.client); }); // rejoin the room after a reconnect
+// ---- Luoi truc tiep: khi tab Truc tiep dang mo, moi may gui anh nho ~1 fps len the cua no ----
+const gridFrames = new Map(); // id -> { url, at }
+let gridTimer = null;
+function refreshGridSub() {
+  const want = document.getElementById('live').classList.contains('active') && !document.hidden;
+  if (want === !!gridTimer) return;
+  if (want) {
+    const ping = () => fetch('/api/live/grid', { method: 'POST' }).catch(() => {});
+    ping();
+    gridTimer = setInterval(ping, 4000);
+  } else { clearInterval(gridTimer); gridTimer = null; }
+  socket.emit('grid-sub', want);
+}
+document.addEventListener('visibilitychange', refreshGridSub);
+function gridFrame(f) {
+  const old = gridFrames.get(f.id);
+  const url = URL.createObjectURL(new Blob([f.data], { type: 'image/jpeg' }));
+  gridFrames.set(f.id, { url, at: Date.now() });
+  if (old) setTimeout(() => URL.revokeObjectURL(old.url), 1000);
+  const img = grid.querySelector(`.card[data-card-client="${CSS.escape(f.id)}"] img.shot`);
+  if (img && img.alt === 'live') img.src = url;
+  else render(); // first frame: swap the saved screenshot for the live one
+}
+
+socket.on('connect', () => { // rejoin the rooms after a reconnect
+  if (liveSub) socket.emit('live-sub', liveSub.client);
+  if (gridTimer) socket.emit('grid-sub', true);
+});
 
 // Frames arrive as binary JPEG (ArrayBuffer) -> show via a Blob URL, freeing the previous one
 let liveUrl = null;
@@ -150,6 +178,7 @@ function liveSrc(data) {
   return liveUrl;
 }
 socket.on('live', (f) => {
+  if (gridTimer) gridFrame(f);
   if (!liveSub || f.id !== liveSub.client) return;
   const now = Date.now();
   liveTimes = liveTimes.filter((t) => t > now - 2000).concat(now);
@@ -161,48 +190,6 @@ socket.on('live', (f) => {
     const img = document.getElementById('rImg'), no = document.getElementById('rNoshot'), t = document.getElementById('rShotTime');
     if (img) { img.src = liveSrc(f.data); img.removeAttribute('data-full'); img.style.display = 'block'; if (no) no.style.display = 'none'; if (t) t.textContent = (f.time || '') + ' (trực tiếp)'; }
   }
-});
-
-// ---- Xem lai log & anh ----
-const daySel = document.getElementById('daySel');
-const fileSel = document.getElementById('fileSel');
-
-async function loadDays() {
-  const days = await (await fetch('/api/log-days')).json();
-  daySel.innerHTML = days.map((d) => `<option>${d}</option>`).join('');
-  if (days.length) await loadFiles();
-}
-
-// Mo log cho 1 may tu tab Truc tiep (uu tien hom nay)
-async function openLogFor(clientId) {
-  activateTab('history');
-  await loadDays();
-  const d = new Date(), p = (n) => String(n).padStart(2, '0');
-  const today = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
-  if ([...daySel.options].some((o) => o.value === today)) { daySel.value = today; await loadFiles(); }
-  const fname = clientId + '.txt';
-  if ([...fileSel.options].some((o) => o.value === fname)) fileSel.value = fname;
-  document.getElementById('loadLog').click();
-}
-async function loadFiles() {
-  const day = daySel.value;
-  if (!day) return;
-  const files = await (await fetch(`/api/logs/${day}`)).json();
-  fileSel.innerHTML = files.map((f) => `<option>${f}</option>`).join('');
-}
-daySel.addEventListener('change', loadFiles);
-
-document.getElementById('loadLog').addEventListener('click', async () => {
-  const txt = await (await fetch(`/api/logs/${daySel.value}/${fileSel.value}`)).text();
-  document.getElementById('logView').textContent = txt;
-  document.getElementById('shotView').innerHTML = '';
-});
-
-document.getElementById('loadShots').addEventListener('click', async () => {
-  const client = (fileSel.value || '').replace(/\.txt$/, '');
-  const urls = await (await fetch(`/api/shots/${daySel.value}/${client}`)).json();
-  document.getElementById('logView').textContent = '';
-  document.getElementById('shotView').innerHTML = urls.map((u) => `<img src="${u}" data-full="${u}" />`).join('') || '<p class="empty">Không có ảnh.</p>';
 });
 
 // ---- Bao cao (thoi gian dung app + idle) ----
@@ -430,3 +417,5 @@ function renderDomains(r) {
     </div>`).join('');
   return `<h3 class="rh" style="margin-top:22px">Thời gian theo trang web (endpoint)</h3><div class="rlist">${rows}</div>`;
 }
+
+refreshGridSub(); // tab Truc tiep la tab mac dinh

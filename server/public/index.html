@@ -15,7 +15,6 @@
   <nav class="tabs">
     <button class="tab active" data-tab="live">Trực tiếp</button>
     <button class="tab" data-tab="report">Báo cáo</button>
-    <button class="tab" data-tab="history">Xem lại log &amp; ảnh</button>
   </nav>
 
   <!-- TAB TRUC TIEP -->
@@ -38,22 +37,6 @@
     <div id="reportBody">
       <p class="empty">Chọn ngày và máy rồi bấm “Xem báo cáo”.</p>
     </div>
-  </section>
-
-  <!-- TAB XEM LAI -->
-  <section id="history" class="panel">
-    <div class="controls">
-      <label>Ngày:
-        <select id="daySel"></select>
-      </label>
-      <label>Máy:
-        <select id="fileSel"></select>
-      </label>
-      <button id="loadLog">Xem log</button>
-      <button id="loadShots">Xem ảnh</button>
-    </div>
-    <pre id="logView" class="logview"></pre>
-    <div id="shotView" class="shotview"></div>
   </section>
 
   <!-- Modal xem anh lon -->

@@ -39,6 +39,11 @@ const LIVE_FPS = Number(cfg.liveFps || 8);
 const LIVE_QUALITY = Number(cfg.liveJpegQuality || 50);
 const LIVE_W = Number(cfg.liveMaxWidth || 1280); // live frames are downscaled to fit LIVE_W x LIVE_H (720p)
 const LIVE_H = Number(cfg.liveMaxHeight || 720);
+// Live grid (dashboard shows every machine at once): small + slow to stay light on CPU and bandwidth
+const GRID_FPS = Number(cfg.liveGridFps || 1);
+const GRID_QUALITY = Number(cfg.liveGridJpegQuality || 40);
+const GRID_W = Number(cfg.liveGridMaxWidth || 640);
+const GRID_H = Number(cfg.liveGridMaxHeight || 360);
 const PS_EXE = process.env.WM_PS || 'powershell'; // overridable for tests
 
 // ---- Run with low CPU priority so the employee's own apps always win ----
@@ -238,8 +243,9 @@ while ($true) {
 
 // Live view: ONE long-running PowerShell that loops capture -> downscale -> JPEG in memory -> POST raw bytes.
 // Avoids a powershell.exe spawn + Add-Type compile per frame (the old ~1 fps bottleneck). Uploads via WebClient
-// (system proxy + keep-alive). Exits on its own when the server answers live:false or keeps failing.
-fs.writeFileSync(PS_LIVE, `param([string]$Url,[string]$Token,[int]$Fps=8,[int]$Quality=50,[int]$MaxW=1280,[int]$MaxH=720)
+// (system proxy + keep-alive). When the server asks for another mode (or none) it prints that answer and exits,
+// so the agent can restart it in the new mode right away; it also exits if uploads keep failing.
+fs.writeFileSync(PS_LIVE, `param([string]$Url,[string]$Token,[string]$Mode='full',[int]$Fps=8,[int]$Quality=50,[int]$MaxW=1280,[int]$MaxH=720)
 try { [System.Diagnostics.Process]::GetCurrentProcess().PriorityClass = 'BelowNormal' } catch {}
 try {
   Add-Type @"
@@ -284,14 +290,14 @@ while ($true) {
     $bytes = $ms.ToArray(); $ms.Dispose()
     $hash = [string]$t0
     if ($md5) { $hash = [BitConverter]::ToString($md5.ComputeHash($bytes)) }
-    # Skip unchanged frames, but still send one every 2s so the live:false answer arrives
+    # Skip unchanged frames, but still send one every 2s so the mode-change answer arrives
     if ($hash -ne $lastHash -or ($t0 - $lastSent) -ge 2000) {
       try {
         $wc.Headers['Content-Type'] = 'image/jpeg'
         if ($Token) { $wc.Headers['x-agent-token'] = $Token }
         $resp = [System.Text.Encoding]::UTF8.GetString($wc.UploadData($Url, 'POST', $bytes))
         $lastHash = $hash; $lastSent = $t0; $fails = 0
-        if ($resp -like '*"live":false*') { break }
+        if (-not ($resp -like ('*"mode":"' + $Mode + '"*'))) { [Console]::Out.WriteLine($resp); break }
       } catch {
         $fails++
         if ($fails -ge 10) { break }
@@ -517,26 +523,41 @@ async function takeScreenshot() {
   }
 }
 
-// ---- On-demand live view: when someone is watching, stream 720p JPEG to /ingest/live (NOT saved on server) ----
+// ---- On-demand live view (NOT saved on server). The server picks the mode:
+//   'full' = this machine is opened on a dashboard -> 720p, LIVE_FPS
+//   'grid' = a dashboard shows the live grid       -> small, GRID_FPS
 let liveProc = null;
+let liveMode = '';  // mode of the running process
+let wantMode = '';  // mode the server last asked for
 function handleLive(body) {
-  let want = false;
-  try { want = !!JSON.parse(body || '{}').live; } catch {}
-  if (want && !liveProc) startLive();
-  else if (!want && liveProc) { try { liveProc.kill(); } catch {} }
+  let mode = '';
+  try { const j = JSON.parse(body || '{}'); mode = j.mode != null ? j.mode : (j.live ? 'full' : ''); } catch {}
+  wantMode = mode === 'full' || mode === 'grid' ? mode : '';
+  if (liveProc) { if (liveMode !== wantMode) { try { liveProc.kill(); } catch {} } return; } // exit handler restarts it
+  if (wantMode) startLive(wantMode);
 }
-function startLive() {
+function startLive(mode) {
+  const full = mode === 'full';
+  const fps = full ? LIVE_FPS : GRID_FPS, w = full ? LIVE_W : GRID_W, h = full ? LIVE_H : GRID_H;
   const url = `${SERVER}/ingest/live?id=${encodeURIComponent(ID)}`;
   let p;
   try {
     p = spawn(PS_EXE, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', PS_LIVE,
-      '-Url', url, '-Token', TOKEN, '-Fps', String(LIVE_FPS), '-Quality', String(LIVE_QUALITY),
-      '-MaxW', String(LIVE_W), '-MaxH', String(LIVE_H)], { windowsHide: true, stdio: 'ignore' });
+      '-Url', url, '-Token', TOKEN, '-Mode', mode, '-Fps', String(fps), '-Quality', String(full ? LIVE_QUALITY : GRID_QUALITY),
+      '-MaxW', String(w), '-MaxH', String(h)], { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
   } catch (e) { console.log('Live view error:', e.message); return; }
-  liveProc = p;
+  liveProc = p; liveMode = mode;
   lowPriority(p.pid);
-  console.log(`[${nowTime()}] Live view started (${LIVE_FPS} fps, max ${LIVE_W}x${LIVE_H}).`);
-  const done = () => { if (liveProc === p) { liveProc = null; console.log(`[${nowTime()}] Live view stopped.`); } };
+  console.log(`[${nowTime()}] Live view started: ${mode} (${fps} fps, max ${w}x${h}).`);
+  let answer = ''; // the server reply that made it exit (mode changed), if any
+  p.stdout.on('data', (d) => { if (answer.length < 4096) answer += d; });
+  const done = () => {
+    if (liveProc !== p) return;
+    liveProc = null; liveMode = '';
+    console.log(`[${nowTime()}] Live view stopped: ${mode}.`);
+    if (answer.trim()) handleLive(answer.trim());               // switch mode right away
+    else if (wantMode && wantMode !== mode) startLive(wantMode); // we killed it to switch
+  };
   p.on('exit', done);
   p.on('error', done);
 }
