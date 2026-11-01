@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Giám sát nhân viên</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <h1>🖥️ Bảng giám sát nhân viên</h1>
+    <div id="status" class="status">Đang kết nối…</div>
+  </header>
+
+  <nav class="tabs">
+    <button class="tab active" data-tab="live">Trực tiếp</button>
+    <button class="tab" data-tab="report">Báo cáo</button>
+    <button class="tab" data-tab="history">Xem lại log &amp; ảnh</button>
+  </nav>
+
+  <!-- TAB TRUC TIEP -->
+  <section id="live" class="panel active">
+    <div class="grid" id="clientGrid"></div>
+    <p id="empty" class="empty">Chưa có máy nào kết nối. Hãy chạy agent trên máy nhân viên.</p>
+  </section>
+
+  <!-- TAB BAO CAO -->
+  <section id="report" class="panel">
+    <div class="controls">
+      <label>Ngày:
+        <select id="rDay"></select>
+      </label>
+      <label>Máy:
+        <select id="rClient"></select>
+      </label>
+      <button id="rLoad">Xem báo cáo</button>
+    </div>
+    <div id="reportBody">
+      <p class="empty">Chọn ngày và máy rồi bấm “Xem báo cáo”.</p>
+    </div>
+  </section>
+
+  <!-- TAB XEM LAI -->
+  <section id="history" class="panel">
+    <div class="controls">
+      <label>Ngày:
+        <select id="daySel"></select>
+      </label>
+      <label>Máy:
+        <select id="fileSel"></select>
+      </label>
+      <button id="loadLog">Xem log</button>
+      <button id="loadShots">Xem ảnh</button>
+    </div>
+    <pre id="logView" class="logview"></pre>
+    <div id="shotView" class="shotview"></div>
+  </section>
+
+  <!-- Modal xem anh lon -->
+  <div id="modal" class="modal hidden"><img id="modalImg" src="" alt="" /></div>
+
+  <!-- Modal xem truc tiep (1 fps, khong luu) -->
+  <div id="liveModal" class="modal hidden">
+    <div class="livebox" onclick="event.stopPropagation()">
+      <div class="livehead">
+        <span id="liveTitle">Xem trực tiếp</span>
+        <span class="livedot">● LIVE 1fps · không lưu</span>
+        <button id="liveClose" class="liveclose">✕ Đóng</button>
+      </div>
+      <div class="livewrap"><img id="liveImg" class="liveimg" alt="live" style="display:none" /><div id="liveStatus" class="livestatus">Đang kết nối tới máy…</div></div>
+    </div>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

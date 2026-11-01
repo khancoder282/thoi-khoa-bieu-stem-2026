@@ -1,0 +1,352 @@
+const socket = io({ auth: { role: 'dashboard' } });
+const statusEl = document.getElementById('status');
+const grid = document.getElementById('clientGrid');
+const empty = document.getElementById('empty');
+
+const state = new Map(); // id -> client info
+
+socket.on('connect', () => { statusEl.textContent = '● Đã kết nối server'; statusEl.className = 'status on'; });
+socket.on('disconnect', () => { statusEl.textContent = '● Mất kết nối server'; statusEl.className = 'status off'; });
+
+socket.on('clients', (list) => {
+  state.clear();
+  list.forEach((c) => state.set(c.id, c));
+  render();
+});
+
+socket.on('activity', (a) => {
+  const c = state.get(a.id) || { id: a.id, name: a.id };
+  c.lastActivity = a;
+  c.online = true;
+  state.set(a.id, c);
+  render();
+});
+
+socket.on('screenshot', (s) => {
+  const c = state.get(s.id) || { id: s.id, name: s.id };
+  c.lastShot = s.url;
+  c.lastShotTime = s.time;
+  c.online = true;
+  state.set(s.id, c);
+  render();
+  if (typeof reportOnShot === 'function') reportOnShot(s);
+});
+
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"]/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[m]));
+}
+
+function render() {
+  const list = [...state.values()];
+  empty.style.display = list.length ? 'none' : 'block';
+  grid.innerHTML = list.map((c) => {
+    const a = c.lastActivity || {};
+    const shot = c.lastShot
+      ? `<img class="shot" src="${c.lastShot}?t=${encodeURIComponent(c.lastShotTime || '0')}" alt="screenshot" />`
+      : `<div class="noshot">Chưa có ảnh</div>`;
+    return `<div class="card clickable" data-card-client="${esc(c.id)}" title="Bấm để xem trực tiếp (1 fps)">
+      ${shot}
+      <div class="meta">
+        <div class="name"><span class="dot ${c.online ? 'on' : 'off'}"></span>${esc(c.name)} <small style="color:#6b7280">${esc(c.host || '')}</small></div>
+        <div class="act">
+          <div><b>Phần mềm:</b> ${esc(a.app) || '—'}</div>
+          <div><b>Cửa sổ:</b> ${esc(a.title) || '—'}</div>
+          ${a.url ? `<div><b>Trang web:</b> ${esc(a.url)}</div>` : ''}
+          <div><b>File/đường dẫn:</b> ${esc(a.file) || '—'}</div>
+        </div>
+        <div class="time">Cập nhật: ${esc(a.time || c.lastShotTime || '')}
+          <span class="cardlinks"><span class="golog" data-log-client="${esc(c.id)}">Xem log</span> · <span class="goreport" data-report-client="${esc(c.id)}">Báo cáo →</span></span>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// Tabs
+function activateTab(name) {
+  document.querySelectorAll('.tab').forEach((x) => x.classList.toggle('active', x.dataset.tab === name));
+  document.querySelectorAll('.panel').forEach((x) => x.classList.toggle('active', x.id === name));
+  if (name === 'history') loadDays();
+  if (name === 'report') loadReportDays();
+  if (typeof refreshLiveSub === 'function') refreshLiveSub(); // start/stop inline live for the report tab
+}
+document.querySelectorAll('.tab').forEach((t) => {
+  t.addEventListener('click', () => activateTab(t.dataset.tab));
+});
+
+// Modal xem anh lon
+const modal = document.getElementById('modal');
+const modalImg = document.getElementById('modalImg');
+document.body.addEventListener('click', (e) => {
+  const img = e.target.closest('[data-full]') || (e.target.matches('.shotview img') ? e.target : null);
+  if (img) { modalImg.src = img.dataset.full || img.src; modal.classList.remove('hidden'); return; }
+  const logEl = e.target.closest('[data-log-client]');
+  if (logEl) { e.stopPropagation(); openLogFor(logEl.dataset.logClient); return; }
+  const repEl = e.target.closest('[data-report-client]');
+  if (repEl) { e.stopPropagation(); openReportFor(repEl.dataset.reportClient); return; }
+  const card = e.target.closest('.card[data-card-client]');
+  if (card) { openLiveView(card.dataset.cardClient); return; }
+  if (e.target === modal) modal.classList.add('hidden');
+  if (e.target === liveModal) closeLiveView();
+});
+
+// ---- Xem truc tiep 1 fps (khong luu): dung chung cho modal va khung trai Bao cao ----
+const liveModal = document.getElementById('liveModal');
+let liveModalClient = null;
+let liveSub = null; // { client, target: 'modal' | 'report', keepalive }
+
+function desiredLive() {
+  if (!liveModal.classList.contains('hidden') && liveModalClient) return { client: liveModalClient, target: 'modal' };
+  if (document.getElementById('report').classList.contains('active') && viewer.realtime && viewer.client && rDay.value === todayStr())
+    return { client: viewer.client, target: 'report' };
+  return null;
+}
+function refreshLiveSub() {
+  const d = desiredLive();
+  if (!d) return stopLive();
+  if (liveSub && liveSub.client === d.client && liveSub.target === d.target) return;
+  stopLive();
+  const ping = () => fetch(`/api/live/start/${encodeURIComponent(d.client)}`, { method: 'POST' }).catch(() => {});
+  ping();
+  liveSub = { client: d.client, target: d.target, keepalive: setInterval(ping, 4000) };
+}
+function stopLive() {
+  if (!liveSub) return;
+  clearInterval(liveSub.keepalive);
+  const cl = liveSub.client;
+  liveSub = null;
+  fetch(`/api/live/stop/${encodeURIComponent(cl)}`, { method: 'POST' }).catch(() => {});
+}
+function openLiveView(clientId) {
+  liveModalClient = clientId;
+  document.getElementById('liveTitle').textContent = 'Xem trực tiếp: ' + ((state.get(clientId) || {}).name || clientId);
+  const img = document.getElementById('liveImg'), st = document.getElementById('liveStatus');
+  img.style.display = 'none'; st.style.display = 'block'; st.textContent = 'Đang kết nối tới máy… (tối đa ~5s)';
+  liveModal.classList.remove('hidden');
+  refreshLiveSub();
+}
+function closeLiveView() {
+  liveModal.classList.add('hidden');
+  liveModalClient = null;
+  document.getElementById('liveImg').src = '';
+  refreshLiveSub(); // resume report-inline live if applicable
+}
+document.getElementById('liveClose').addEventListener('click', closeLiveView);
+
+socket.on('live', (f) => {
+  if (!liveSub || f.id !== liveSub.client) return;
+  if (liveSub.target === 'modal') {
+    const img = document.getElementById('liveImg'), st = document.getElementById('liveStatus');
+    img.src = 'data:image/jpeg;base64,' + f.data; img.style.display = 'block'; st.style.display = 'none';
+  } else {
+    const img = document.getElementById('rImg'), no = document.getElementById('rNoshot'), t = document.getElementById('rShotTime');
+    if (img) { img.src = 'data:image/jpeg;base64,' + f.data; img.removeAttribute('data-full'); img.style.display = 'block'; if (no) no.style.display = 'none'; if (t) t.textContent = (f.time || '') + ' (trực tiếp)'; }
+  }
+});
+
+// ---- Xem lai log & anh ----
+const daySel = document.getElementById('daySel');
+const fileSel = document.getElementById('fileSel');
+
+async function loadDays() {
+  const days = await (await fetch('/api/log-days')).json();
+  daySel.innerHTML = days.map((d) => `<option>${d}</option>`).join('');
+  if (days.length) await loadFiles();
+}
+
+// Mo log cho 1 may tu tab Truc tiep (uu tien hom nay)
+async function openLogFor(clientId) {
+  activateTab('history');
+  await loadDays();
+  const d = new Date(), p = (n) => String(n).padStart(2, '0');
+  const today = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  if ([...daySel.options].some((o) => o.value === today)) { daySel.value = today; await loadFiles(); }
+  const fname = clientId + '.txt';
+  if ([...fileSel.options].some((o) => o.value === fname)) fileSel.value = fname;
+  document.getElementById('loadLog').click();
+}
+async function loadFiles() {
+  const day = daySel.value;
+  if (!day) return;
+  const files = await (await fetch(`/api/logs/${day}`)).json();
+  fileSel.innerHTML = files.map((f) => `<option>${f}</option>`).join('');
+}
+daySel.addEventListener('change', loadFiles);
+
+document.getElementById('loadLog').addEventListener('click', async () => {
+  const txt = await (await fetch(`/api/logs/${daySel.value}/${fileSel.value}`)).text();
+  document.getElementById('logView').textContent = txt;
+  document.getElementById('shotView').innerHTML = '';
+});
+
+document.getElementById('loadShots').addEventListener('click', async () => {
+  const client = (fileSel.value || '').replace(/\.txt$/, '');
+  const urls = await (await fetch(`/api/shots/${daySel.value}/${client}`)).json();
+  document.getElementById('logView').textContent = '';
+  document.getElementById('shotView').innerHTML = urls.map((u) => `<img src="${u}" data-full="${u}" />`).join('') || '<p class="empty">Không có ảnh.</p>';
+});
+
+// ---- Bao cao (thoi gian dung app + idle) ----
+const rDay = document.getElementById('rDay');
+const rClient = document.getElementById('rClient');
+
+function fmtDur(sec) {
+  sec = Math.max(0, Math.round(sec));
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+  if (h) return `${h}h ${m}m`;
+  if (m) return `${m}m ${s}s`;
+  return `${s}s`;
+}
+
+let reportLoaded = false;
+let curReportKey = '';
+const viewer = { client: '', day: '', shots: [], realtime: true };
+
+function todayStr() {
+  const d = new Date(), p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+function shotTimeFromUrl(u) { const m = String(u).match(/(\d{2})-(\d{2})-(\d{2})\.jpg$/); return m ? `${m[1]}:${m[2]}:${m[3]}` : ''; }
+
+async function loadReportDays() {
+  const days = await (await fetch('/api/report-days')).json();
+  rDay.innerHTML = days.map((d) => `<option>${d}</option>`).join('');
+  if (days.length) await loadReportClients();
+}
+async function loadReportClients() {
+  if (!rDay.value) return;
+  const list = await (await fetch(`/api/report/${rDay.value}`)).json();
+  rClient.innerHTML = list.map((c) => `<option>${c}</option>`).join('');
+}
+rDay.addEventListener('change', loadReportClients);
+
+// ---- Viewer anh + timeline ----
+function ensureSkeleton() {
+  if (document.getElementById('rStats')) return;
+  document.getElementById('reportBody').innerHTML = `
+    <div class="rlayout">
+      <div class="rleft">
+        <div class="rshotwrap"><img id="rImg" class="rimg" alt="screenshot" style="display:none"/><div id="rNoshot" class="rnoshot">Chưa có ảnh</div></div>
+        <div class="rtl">
+          <input type="range" id="rSlider" min="0" max="0" value="0" step="1"/>
+          <div class="rtlbar">
+            <span id="rShotTime" class="rshottime">—</span>
+            <button id="rLive" class="rlivebtn on">● Trực tiếp</button>
+          </div>
+        </div>
+      </div>
+      <div class="rright" id="rStats"></div>
+    </div>`;
+  document.getElementById('rSlider').addEventListener('input', (e) => { viewer.realtime = false; showShot(+e.target.value); updateLiveBtn(); refreshLiveSub(); });
+  document.getElementById('rLive').addEventListener('click', () => {
+    viewer.realtime = true;
+    const n = viewer.shots.length;
+    const sl = document.getElementById('rSlider');
+    if (sl && n) sl.value = n - 1;
+    if (n) showShot(n - 1); // placeholder ảnh mới nhất trong lúc chờ khung live
+    updateLiveBtn(); refreshLiveSub();
+  });
+}
+function updateLiveBtn() { const b = document.getElementById('rLive'); if (b) b.classList.toggle('on', viewer.realtime); }
+function showShot(i) {
+  const img = document.getElementById('rImg'), no = document.getElementById('rNoshot'), t = document.getElementById('rShotTime');
+  if (!img) return;
+  if (i < 0 || i >= viewer.shots.length) { img.style.display = 'none'; no.style.display = 'flex'; if (t) t.textContent = '—'; return; }
+  const s = viewer.shots[i];
+  img.src = s.url; img.dataset.full = s.url; img.style.display = 'block'; no.style.display = 'none';
+  if (t) t.textContent = s.time + (viewer.realtime ? ' (mới nhất)' : '');
+}
+async function loadShots(day, client) {
+  const urls = await (await fetch(`/api/shots/${day}/${client}`)).json();
+  viewer.shots = urls.map((u) => ({ url: u, time: shotTimeFromUrl(u) }));
+  const sl = document.getElementById('rSlider');
+  sl.max = Math.max(0, viewer.shots.length - 1);
+  sl.value = Math.max(0, viewer.shots.length - 1);
+  sl.disabled = viewer.shots.length === 0;
+  viewer.realtime = true;
+  showShot(viewer.shots.length - 1); // placeholder ngay; khung live se thay the
+  updateLiveBtn();
+  refreshLiveSub(); // bat stream truc tiep vao khung trai
+}
+// Goi tu socket khi co anh LUU moi (30s). Khi dang realtime thi khung live tu lo anh, chi cap nhat timeline.
+function reportOnShot(s) {
+  if (!document.getElementById('report').classList.contains('active')) return;
+  if (s.id !== viewer.client || rDay.value !== todayStr()) return;
+  viewer.shots.push({ url: s.url, time: s.time || shotTimeFromUrl(s.url) });
+  const sl = document.getElementById('rSlider');
+  if (sl) { sl.max = viewer.shots.length - 1; sl.disabled = false; if (viewer.realtime) sl.value = viewer.shots.length - 1; }
+}
+
+async function loadReport(showEmpty) {
+  if (!rDay.value || !rClient.value) { if (showEmpty) document.getElementById('reportBody').innerHTML = '<p class="empty">Chưa có dữ liệu.</p>'; return; }
+  const res = await fetch(`/api/report/${rDay.value}/${rClient.value}`);
+  if (!res.ok) { if (showEmpty) document.getElementById('reportBody').innerHTML = '<p class="empty">Máy này chưa có dữ liệu báo cáo trong ngày đã chọn.</p>'; return; }
+  const r = await res.json();
+  const key = rDay.value + '|' + rClient.value;
+  ensureSkeleton();
+  renderStats(document.getElementById('rStats'), r);
+  if (key !== curReportKey) {
+    curReportKey = key;
+    viewer.client = rClient.value; viewer.day = rDay.value;
+    await loadShots(rDay.value, rClient.value);
+  }
+  reportLoaded = true;
+}
+document.getElementById('rLoad').addEventListener('click', () => loadReport(true));
+
+async function openReportFor(clientId) {
+  activateTab('report');
+  await loadReportDays();
+  const today = todayStr();
+  if ([...rDay.options].some((o) => o.value === today)) { rDay.value = today; await loadReportClients(); }
+  if ([...rClient.options].some((o) => o.value === clientId)) rClient.value = clientId;
+  loadReport(true);
+}
+
+// Tu dong cap nhat so lieu moi 20s khi dang o tab Bao cao (khong dong cham timeline)
+setInterval(() => {
+  if (reportLoaded && document.getElementById('report').classList.contains('active') && rDay.value && rClient.value) {
+    fetch(`/api/report/${rDay.value}/${rClient.value}`).then((res) => res.ok ? res.json() : null).then((r) => {
+      if (r && document.getElementById('rStats')) renderStats(document.getElementById('rStats'), r);
+    }).catch(() => {});
+  }
+}, 20000);
+
+function renderStats(el, r) {
+  const total = r.activeSec + r.idleSec || 1;
+  const activePct = Math.round((r.activeSec / total) * 100);
+  const idlePct = 100 - activePct;
+  const maxApp = r.apps.length ? r.apps[0].seconds : 1;
+
+  const appRows = r.apps.map((a) => `
+    <div class="rrow">
+      <div class="rname" title="${esc(a.app)}">${esc(a.app)}</div>
+      <div class="rbar"><div class="rfill" style="width:${Math.max(2, Math.round((a.seconds / maxApp) * 100))}%"></div></div>
+      <div class="rtime">${fmtDur(a.seconds)}</div>
+    </div>`).join('') || '<p class="empty">Không có ứng dụng nào được ghi nhận.</p>';
+
+  el.innerHTML = `
+    <div class="rsum">
+      <div class="rcard"><div class="rlabel">Tổng thời gian theo dõi</div><div class="rbig">${fmtDur(total)}</div></div>
+      <div class="rcard"><div class="rlabel">Đang làm việc</div><div class="rbig" style="color:#4ade80">${fmtDur(r.activeSec)} <small>(${activePct}%)</small></div></div>
+      <div class="rcard"><div class="rlabel">Rảnh/không thao tác</div><div class="rbig" style="color:#fbbf24">${fmtDur(r.idleSec)} <small>(${idlePct}%)</small></div></div>
+    </div>
+    <div class="rsplit"><div class="rsplit-a" style="width:${activePct}%"></div><div class="rsplit-i" style="width:${idlePct}%"></div></div>
+    <p class="rmeta">Từ ${esc(r.firstSeen)} đến ${esc(r.lastSeen)} · ${r.samples} mẫu · ngưỡng idle ${r.idleThreshold}s</p>
+    <h3 class="rh">Thời gian dùng theo ứng dụng</h3>
+    <div class="rlist">${appRows}</div>
+    ${renderDomains(r)}`;
+}
+
+function renderDomains(r) {
+  const doms = r.domains || [];
+  if (!doms.length) return '';
+  const maxD = doms[0].seconds || 1;
+  const rows = doms.map((d) => `
+    <div class="rrow">
+      <div class="rname" title="${esc(d.domain)}">${esc(d.domain)}</div>
+      <div class="rbar"><div class="rfill rfill-web" style="width:${Math.max(2, Math.round((d.seconds / maxD) * 100))}%"></div></div>
+      <div class="rtime">${fmtDur(d.seconds)}</div>
+    </div>`).join('');
+  return `<h3 class="rh" style="margin-top:22px">Thời gian theo trang web (endpoint)</h3><div class="rlist">${rows}</div>`;
+}

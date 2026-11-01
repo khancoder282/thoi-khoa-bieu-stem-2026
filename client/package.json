@@ -1,0 +1,15 @@
+{
+  "name": "monitor-agent",
+  "version": "1.0.0",
+  "description": "Agent giam sat chay tren may nhan vien (Windows 7/10, 32/64-bit) - khong phu thuoc npm",
+  "type": "module",
+  "main": "client.js",
+  "scripts": {
+    "start": "node client.js",
+    "build": "esbuild client.js --bundle --platform=node --target=node12 --outfile=../server/public/download/agent.cjs"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "esbuild": "^0.21.5"
+  }
+}
