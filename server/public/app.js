@@ -119,6 +119,7 @@ function stopLive() {
   const cl = liveSub.client;
   liveSub = null;
   liveTimes = [];
+  if (liveUrl) { URL.revokeObjectURL(liveUrl); liveUrl = null; } // free the last frame's blob
   document.getElementById('liveFps').textContent = '● LIVE · không lưu';
   socket.emit('live-sub', null);
   fetch(`/api/live/stop/${encodeURIComponent(cl)}`, { method: 'POST' }).catch(() => {});
@@ -149,7 +150,11 @@ function refreshGridSub() {
     const ping = () => fetch('/api/live/grid', { method: 'POST' }).catch(() => {});
     ping();
     gridTimer = setInterval(ping, 4000);
-  } else { clearInterval(gridTimer); gridTimer = null; }
+  } else {
+    clearInterval(gridTimer); gridTimer = null;
+    for (const f of gridFrames.values()) URL.revokeObjectURL(f.url); // free the last frame of every tile
+    gridFrames.clear();
+  }
   socket.emit('grid-sub', want);
 }
 document.addEventListener('visibilitychange', refreshGridSub);
