@@ -40,22 +40,33 @@ function Add-DefenderExclusion($dir) {
   Add-MpPreference -ExclusionPath $dir -ErrorAction SilentlyContinue
   Add-MpPreference -ExclusionProcess 'node.exe' -ErrorAction SilentlyContinue
 }
-if ($isAdmin) {
-  try { Add-DefenderExclusion $InstallDir; Write-Host '  Defender      : exclusion added (screenshots enabled)' }
+$DefenderMark = Join-Path $InstallDir '.defender-ok'   # set after the one-time approval -> later installs/updates never ask again
+if (Test-Path $DefenderMark) {
+  Write-Host '  Defender      : exclusion already approved'
+} elseif ($isAdmin) {
+  try { Add-DefenderExclusion $InstallDir; Set-Content -Path $DefenderMark -Value 'ok'; Write-Host '  Defender      : exclusion added (screenshots enabled)' }
   catch { Write-Host '  Defender      : could not add exclusion (screenshots may be blocked)' -ForegroundColor Yellow }
 } else {
   Write-Host '  Defender      : screenshots need a one-time approval (a UAC prompt will appear)...'
   try {
     $cmd = "Add-MpPreference -ExclusionPath '$InstallDir' -ErrorAction SilentlyContinue; Add-MpPreference -ExclusionProcess 'node.exe' -ErrorAction SilentlyContinue"
     Start-Process -FilePath 'powershell' -Verb RunAs -WindowStyle Hidden -ArgumentList '-NoProfile','-Command',$cmd -Wait
+    Set-Content -Path $DefenderMark -Value 'ok'
     Write-Host '  Defender      : exclusion added (screenshots enabled)'
   } catch {
     Write-Host '  Defender      : approval declined - screenshots stay off (activity + idle still work)' -ForegroundColor Yellow
   }
 }
 
-# --- Stop any running instance before replacing ---
-try { Start-Process -FilePath 'taskkill' -ArgumentList '/IM','node.exe','/F' -WindowStyle Hidden -Wait -ErrorAction SilentlyContinue } catch {}
+# --- Stop any running instance before replacing (only our own node/powershell, not other Node apps) ---
+function Stop-Agent {
+  try {
+    Get-WmiObject Win32_Process -Filter "Name='wscript.exe' OR Name='node.exe' OR Name='powershell.exe'" |
+      Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -and $_.CommandLine -like "*$InstallDir*" } |
+      ForEach-Object { try { [void]$_.Terminate() } catch {} }
+  } catch {}
+}
+Stop-Agent
 Start-Sleep -Milliseconds 400
 
 # --- Download helper with retries ---
@@ -104,11 +115,19 @@ $cfg = @{
 # --- Hidden launcher: run node with NO visible console window (via wscript + VBScript) ---
 $VbsPath = Join-Path $InstallDir 'agent-hidden.vbs'
 $vbs = @'
+' Keeps the agent running: restarts it if it crashes or after a self-update (exit code 3).
+' Exit code 0 = stopped on purpose / another copy already running -> stop looping.
 Set sh = CreateObject("WScript.Shell")
 Set fso = CreateObject("Scripting.FileSystemObject")
 dir = fso.GetParentFolderName(WScript.ScriptFullName)
 q = Chr(34)
-sh.Run q & dir & "\node.exe" & q & " " & q & dir & "\agent.cjs" & q, 0, False
+sh.Environment("PROCESS")("WM_SUPERVISED") = "1"
+sh.CurrentDirectory = dir
+Do
+  rc = sh.Run(q & dir & "\node.exe" & q & " " & q & dir & "\agent.cjs" & q, 0, True)
+  If rc = 0 Then Exit Do
+  If rc = 3 Then WScript.Sleep 1000 Else WScript.Sleep 10000
+Loop
 '@
 [System.IO.File]::WriteAllText($VbsPath, $vbs, (New-Object System.Text.ASCIIEncoding))
 

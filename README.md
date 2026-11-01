@@ -93,10 +93,25 @@ cd client && npm start                     # (trên Windows) đọc config.json 
 ## Gỡ agent khỏi máy nhân viên
 
 ```powershell
-taskkill /IM node.exe /F
+Get-WmiObject Win32_Process | ? { $_.CommandLine -like "*WorkMonitor*" } | % { $_.Terminate() }
 Remove-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name WorkMonitorAgent
 Remove-Item -Recurse -Force "$env:LOCALAPPDATA\WorkMonitor"
 ```
+
+## Tải tài nguyên trên máy nhân viên
+
+- **Một tiến trình PowerShell chạy thường trực** (`work\mon_host.ps1`) nhận lệnh từ agent qua stdin — không còn mở `powershell.exe` + biên dịch C# mỗi 5 giây. Đoạn C# được biên dịch **một lần** ra `work\wm-<ver>.dll` rồi tái sử dụng.
+- URL trình duyệt chỉ đọc lại (UI Automation) khi cửa sổ/tab đổi. Tên + đường dẫn tiến trình được cache theo PID.
+- Máy rảnh ≥ `idleSkipSec` (mặc định 60s): chụp 1 ảnh rồi ngừng chụp tới khi có thao tác lại.
+- Ảnh rộng hơn `screenshotMaxWidth` (mặc định 1920px — màn 2K/4K, nhiều màn hình) được thu nhỏ; ảnh gửi dạng nhị phân `image/jpeg` (không base64).
+- `node.exe` và các PowerShell con chạy ở mức ưu tiên **BelowNormal**.
+
+## Cài một lần, tự chạy và tự cập nhật
+
+- UAC (thêm loại trừ Defender) chỉ hỏi **một lần**; lần cài lại sau không hỏi nữa (file đánh dấu `.defender-ok`).
+- `agent-hidden.vbs` giữ agent luôn chạy: tự khởi động lại khi agent lỗi hoặc sau khi tự cập nhật. Tự chạy khi đăng nhập (HKCU Run).
+- Chỉ một bản agent chạy mỗi user (khoá cổng localhost).
+- **Tự cập nhật:** server trả md5 của `download/agent.cjs` trong mỗi phản hồi `/ingest/activity`; agent khác phiên bản sẽ tự tải, kiểm tra md5, thay file và khởi động lại. Chỉ cần build lại `agent.cjs` trên server là toàn bộ máy tự lên bản mới. (Máy cài bằng bản cũ trước tính năng này cần chạy lại lệnh cài **một lần**.)
 
 ## Giới hạn & hướng mở rộng
 

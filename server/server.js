@@ -2,6 +2,7 @@ import express from 'express';
 import http from 'http';
 import { Server } from 'socket.io';
 import fs from 'fs';
+import crypto from 'crypto';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -203,6 +204,17 @@ function touch(id, name, host) {
   return c;
 }
 
+// md5 of the agent bundle offered for download; agents compare it with their own and self-update
+let agentCache = { mtime: 0, hash: '' };
+function agentHash() {
+  try {
+    const f = path.join(DOWNLOAD_DIR, 'agent.cjs');
+    const m = fs.statSync(f).mtimeMs;
+    if (m !== agentCache.mtime) agentCache = { mtime: m, hash: crypto.createHash('md5').update(fs.readFileSync(f)).digest('hex') };
+    return agentCache.hash;
+  } catch { return ''; }
+}
+
 // ---- Ingest endpoints (agent -> server over plain HTTP) ----
 app.post('/ingest/activity', checkToken, (req, res) => {
   const b = req.body || {};
@@ -216,7 +228,7 @@ app.post('/ingest/activity', checkToken, (req, res) => {
   appendEvent(id, { t: Date.now(), time: a.time, app: a.app, title: a.title, idle: idleSec, url });
   io.emit('activity', { id, ...a });
   io.emit('clients', [...clients.values()]);
-  res.json({ ok: true, live: isLiveWanted(id) });
+  res.json({ ok: true, live: isLiveWanted(id), agent: agentHash() });
 });
 
 // Ephemeral live frame: relay to the dashboards watching this machine, do NOT save to disk.
@@ -236,26 +248,30 @@ app.post('/ingest/live', express.raw({ type: 'image/jpeg', limit: '5mb' }), chec
 app.post('/api/live/start/:client', (req, res) => { liveWanted.set(safe(req.params.client), Date.now() + 12000); res.json({ ok: true }); });
 app.post('/api/live/stop/:client', (req, res) => { liveWanted.delete(safe(req.params.client)); res.json({ ok: true }); });
 
-app.post('/ingest/screenshot', checkToken, (req, res) => {
-  const b = req.body || {};
+// New agents POST raw image/jpeg with ?id=&name=&host=&time=; old agents POST JSON { id, name, host, time, data: base64 }.
+app.post('/ingest/screenshot', express.raw({ type: 'image/jpeg', limit: '25mb' }), checkToken, (req, res) => {
+  const raw = Buffer.isBuffer(req.body);
+  const b = raw ? req.query : (req.body || {});
   const id = safe(b.id);
   const c = touch(id, b.name, b.host);
-  try {
-    const dir = path.join(SHOTS_DIR, today(), id);
-    fs.mkdirSync(dir, { recursive: true });
-    const ts = (b.time || nowTime()).replace(/:/g, '-');
-    const buf = Buffer.from(b.data || '', 'base64');
-    const rel = `/screenshots/${today()}/${id}/${ts}.jpg`;
-    fs.writeFileSync(path.join(dir, `${ts}.jpg`), buf);
-    c.lastShot = rel;
-    appendLog(id, `[${nowTime()}] SCREENSHOT -> ${rel} (${buf.length} bytes)`);
-    io.emit('screenshot', { id, url: rel, time: b.time || nowTime() });
-    io.emit('clients', [...clients.values()]);
-    res.json({ ok: true });
-  } catch (e) {
-    console.error('Screenshot save error:', e.message);
-    res.status(500).json({ ok: false });
-  }
+  const time = /^\d{2}:\d{2}:\d{2}$/.test(b.time || '') ? b.time : nowTime();
+  const ts = time.replace(/:/g, '-');
+  const buf = raw ? req.body : Buffer.from(b.data || '', 'base64');
+  const dir = path.join(SHOTS_DIR, today(), id);
+  const rel = `/screenshots/${today()}/${id}/${ts}.jpg`;
+  fs.mkdir(dir, { recursive: true }, () => {
+    fs.writeFile(path.join(dir, `${ts}.jpg`), buf, (err) => {
+      if (err) {
+        console.error('Screenshot save error:', err.message);
+        return res.status(500).json({ ok: false });
+      }
+      c.lastShot = rel;
+      appendLog(id, `[${nowTime()}] SCREENSHOT -> ${rel} (${buf.length} bytes)`);
+      io.emit('screenshot', { id, url: rel, time });
+      io.emit('clients', [...clients.values()]);
+      res.json({ ok: true });
+    });
+  });
 });
 
 // Mark machines offline when they stop sending
