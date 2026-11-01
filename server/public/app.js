@@ -294,7 +294,8 @@ async function loadLog(day, client) {
   try { const res = await fetch(`/api/logs/${day}/${encodeURIComponent(client)}.txt`); if (res.ok) txt = await res.text(); } catch {}
   logView.lines = txt.split('\n').filter((s) => s.trim()).map(logLine);
   logView.cur = -1;
-  document.getElementById('rLog').innerHTML = logView.lines.map(logLineHtml).join('')
+  // Hien moi nhat tren cung; data-i van la chi so theo thu tu thoi gian
+  document.getElementById('rLog').innerHTML = logView.lines.map(logLineHtml).reverse().join('')
     || '<p class="empty">Không có nhật ký (ngày cũ chỉ giữ báo cáo tổng hợp).</p>';
 }
 // time = giờ của ảnh đang xem; null = trực tiếp (dòng mới nhất)
@@ -314,14 +315,14 @@ function setLogCur(i, scroll = true) {
   el.classList.add('cur');
   if (scroll) box.scrollTop = el.offsetTop - (box.clientHeight - el.offsetHeight) / 2; // chi cuon khung log, khong cuon trang
 }
-// Dong log moi qua socket (cung dinh dang voi server.js) -> them vao cuoi, dang truc tiep thi to dam dong do
+// Dong log moi qua socket (cung dinh dang voi server.js) -> them len dau, dang truc tiep thi to dam dong do
 function reportOnActivity(a) {
   const box = document.getElementById('rLog');
   if (!box || a.id !== viewer.client || viewer.day !== todayStr()) return;
   if (!logView.lines.length) box.innerHTML = '';
   const l = logLine(`[${a.time}] APP="${a.app}" | TITLE="${a.title}" | URL="${a.url || ''}" | FILE="${a.file}" | PID=${a.pid} | IDLE=${a.idleSec}s`);
   logView.lines.push(l);
-  box.insertAdjacentHTML('beforeend', logLineHtml(l, logView.lines.length - 1));
+  box.insertAdjacentHTML('afterbegin', logLineHtml(l, logView.lines.length - 1));
   if (viewer.realtime) setLogCur(logView.lines.length - 1);
 }
 function updateLiveBtn() { const b = document.getElementById('rLive'); if (b) b.classList.toggle('on', viewer.realtime); }
