@@ -31,7 +31,7 @@ app.set('trust proxy', true); // behind nginx
 const server = http.createServer(app);
 const io = new Server(server);
 
-app.use(express.json({ limit: '25mb' })); // screenshots arrive as base64 JSON
+app.use(express.json({ limit: '1mb' })); // activity payloads (screenshots/live frames arrive as raw image/jpeg below)
 
 // ---- Basic Auth for the dashboard (public paths stay open) ----
 function checkBasic(req) {
@@ -231,16 +231,13 @@ app.post('/ingest/activity', checkToken, (req, res) => {
   res.json({ ok: true, live: isLiveWanted(id), agent: agentHash() });
 });
 
-// Ephemeral live frame: relay to the dashboards watching this machine, do NOT save to disk.
-// New agents POST raw image/jpeg with ?id=; old agents POST JSON { id, data: base64 }.
+// Ephemeral live frame (raw image/jpeg body, ?id=): relay to the dashboards watching this machine, do NOT save to disk.
 app.post('/ingest/live', express.raw({ type: 'image/jpeg', limit: '5mb' }), checkToken, (req, res) => {
-  const raw = Buffer.isBuffer(req.body);
-  const b = raw ? {} : (req.body || {});
-  const id = safe(raw ? req.query.id : b.id);
-  const data = raw ? req.body : Buffer.from(b.data || '', 'base64');
+  const id = safe(req.query.id);
+  const data = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
   const c = clients.get(id);
   if (c) c.lastSeen = Date.now();
-  if (data.length) io.to('live:' + id).emit('live', { id, data, time: b.time || nowTime() });
+  if (data.length) io.to('live:' + id).emit('live', { id, data, time: nowTime() });
   res.json({ ok: true, live: isLiveWanted(id) });
 });
 
@@ -248,15 +245,15 @@ app.post('/ingest/live', express.raw({ type: 'image/jpeg', limit: '5mb' }), chec
 app.post('/api/live/start/:client', (req, res) => { liveWanted.set(safe(req.params.client), Date.now() + 12000); res.json({ ok: true }); });
 app.post('/api/live/stop/:client', (req, res) => { liveWanted.delete(safe(req.params.client)); res.json({ ok: true }); });
 
-// New agents POST raw image/jpeg with ?id=&name=&host=&time=; old agents POST JSON { id, name, host, time, data: base64 }.
+// Agents POST a raw image/jpeg body with ?id=&name=&host=&time=
 app.post('/ingest/screenshot', express.raw({ type: 'image/jpeg', limit: '25mb' }), checkToken, (req, res) => {
-  const raw = Buffer.isBuffer(req.body);
-  const b = raw ? req.query : (req.body || {});
+  if (!Buffer.isBuffer(req.body)) return res.status(415).json({ ok: false, error: 'expected image/jpeg body' });
+  const b = req.query;
   const id = safe(b.id);
   const c = touch(id, b.name, b.host);
   const time = /^\d{2}:\d{2}:\d{2}$/.test(b.time || '') ? b.time : nowTime();
   const ts = time.replace(/:/g, '-');
-  const buf = raw ? req.body : Buffer.from(b.data || '', 'base64');
+  const buf = req.body;
   const dir = path.join(SHOTS_DIR, today(), id);
   const rel = `/screenshots/${today()}/${id}/${ts}.jpg`;
   fs.mkdir(dir, { recursive: true }, () => {
