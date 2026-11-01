@@ -245,7 +245,7 @@ function ensureSkeleton() {
             <button id="rLive" class="rlivebtn on">● Trực tiếp</button>
           </div>
         </div>
-        <div class="rloghead">Nhật ký hoạt động <span>(bấm 1 dòng để nhảy tới ảnh)</span></div>
+        <div class="rloghead">Nhật ký hoạt động <span>(bấm 1 dòng để nhảy tới ảnh)</span><button id="rLogMode" class="rlogmode"></button></div>
         <div id="rLog" class="rlog"></div>
       </div>
       <div class="rright" id="rStats"></div>
@@ -259,6 +259,14 @@ function ensureSkeleton() {
     if (n) showShot(n - 1); // placeholder ảnh mới nhất trong lúc chờ khung live
     else setLogCur(logView.lines.length - 1);
     updateLiveBtn(); refreshLiveSub();
+  });
+  document.getElementById('rLogMode').addEventListener('click', () => {
+    logView.mode = logView.mode === 'raw' ? 'group' : 'raw';
+    try { localStorage.setItem('logMode', logView.mode); } catch {}
+    renderLog();
+    const n = viewer.shots.length;
+    if (viewer.realtime || !n) markLog(null);
+    else markLog(viewer.shots[+document.getElementById('rSlider').value].time);
   });
   document.getElementById('rLog').addEventListener('click', (e) => {
     const el = e.target.closest('.rlogline');
@@ -277,18 +285,47 @@ function ensureSkeleton() {
   });
 }
 
-// ---- Nhat ky tung dong: to dam dong khop voi vi tri timeline ----
-const logView = { lines: [], cur: -1 }; // lines: [{ time: 'HH:MM:SS', text }]
+// ---- Nhat ky: to dam dong khop voi vi tri timeline ----
+// raw: moi dong log goc; lines: cac dong dang hien (goc, hoac gop cac mau lien tiep cung app + cua so)
+// lines[i].time = gio bat dau, dung cho markLog / bam dong de nhay toi anh
+const logView = { raw: [], lines: [], cur: -1, mode: 'group' };
+try { if (localStorage.getItem('logMode') === 'raw') logView.mode = 'raw'; } catch {}
 function logLineHtml(l, i) { return `<div class="rlogline" data-i="${i}" title="${esc(l.text)}">${esc(l.text)}</div>`; }
-function logLine(text) { const m = String(text).match(/(\d{2}:\d{2}:\d{2})/); return { time: m ? m[1] : '', text }; }
-async function loadLog(day, client) {
-  let txt = '';
-  try { const res = await fetch(`/api/logs/${day}/${encodeURIComponent(client)}.txt`); if (res.ok) txt = await res.text(); } catch {}
-  logView.lines = txt.split('\n').filter((s) => s.trim()).map(logLine);
-  logView.cur = -1;
+function logLine(text) {
+  const m = String(text).match(/(\d{2}:\d{2}:\d{2})/);
+  const a = String(text).match(/APP="(.*?)" \| TITLE="(.*)" \| URL="/);
+  const kind = a ? 'act' : /SCREENSHOT ->/.test(text) ? 'shot' : 'other';
+  return { time: m ? m[1] : '', text, kind, app: a ? a[1] : '', title: a ? a[2] : '' };
+}
+function groupText(g) { return `[${g.time} -> ${g.end}] APP="${g.app}" | TITLE="${g.title}"`; }
+// Them 1 dong goc vao danh sach hien thi; tra ve true neu chi keo dai dong gop cuoi (khong them dong moi)
+function addLogRow(l) {
+  if (logView.mode === 'raw') { logView.lines.push(l); return false; }
+  if (l.kind === 'shot') return null; // che do gop: bo dong chup anh
+  const last = logView.lines[logView.lines.length - 1];
+  if (l.kind === 'act' && last && last.kind === 'act' && last.app === l.app && last.title === l.title) {
+    last.end = l.time; last.text = groupText(last);
+    return true;
+  }
+  const g = l.kind === 'act' ? { ...l, end: l.time } : { ...l };
+  if (g.kind === 'act') g.text = groupText(g);
+  logView.lines.push(g);
+  return false;
+}
+function renderLog() {
+  logView.lines = []; logView.cur = -1;
+  for (const l of logView.raw) addLogRow(l);
   // Hien moi nhat tren cung; data-i van la chi so theo thu tu thoi gian
   document.getElementById('rLog').innerHTML = logView.lines.map(logLineHtml).reverse().join('')
     || '<p class="empty">Không có nhật ký (ngày cũ chỉ giữ báo cáo tổng hợp).</p>';
+  const b = document.getElementById('rLogMode');
+  if (b) b.textContent = logView.mode === 'raw' ? 'Xem gộp theo app' : 'Xem từng dòng';
+}
+async function loadLog(day, client) {
+  let txt = '';
+  try { const res = await fetch(`/api/logs/${day}/${encodeURIComponent(client)}.txt`); if (res.ok) txt = await res.text(); } catch {}
+  logView.raw = txt.split('\n').filter((s) => s.trim()).map(logLine);
+  renderLog();
 }
 // time = giờ của ảnh đang xem; null = trực tiếp (dòng mới nhất)
 function markLog(time) {
@@ -313,9 +350,16 @@ function reportOnActivity(a) {
   if (!box || a.id !== viewer.client || viewer.day !== todayStr()) return;
   if (!logView.lines.length) box.innerHTML = '';
   const l = logLine(`[${a.time}] APP="${a.app}" | TITLE="${a.title}" | URL="${a.url || ''}" | FILE="${a.file}" | PID=${a.pid} | IDLE=${a.idleSec}s`);
-  logView.lines.push(l);
-  box.insertAdjacentHTML('afterbegin', logLineHtml(l, logView.lines.length - 1));
-  if (viewer.realtime) setLogCur(logView.lines.length - 1);
+  logView.raw.push(l);
+  const extended = addLogRow(l);
+  const i = logView.lines.length - 1;
+  if (extended) { // cung app + cua so: chi cap nhat gio ket thuc cua dong tren cung
+    const el = box.querySelector(`.rlogline[data-i="${i}"]`);
+    if (el) { el.textContent = logView.lines[i].text; el.title = logView.lines[i].text; }
+  } else if (extended === false) {
+    box.insertAdjacentHTML('afterbegin', logLineHtml(logView.lines[i], i));
+  }
+  if (viewer.realtime) setLogCur(i);
 }
 function updateLiveBtn() { const b = document.getElementById('rLive'); if (b) b.classList.toggle('on', viewer.realtime); }
 function showShot(i) {
