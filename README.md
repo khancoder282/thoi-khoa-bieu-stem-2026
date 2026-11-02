@@ -41,8 +41,10 @@ Máy nhân viên (Windows)                 trixco-main (server nhà)
 Mở PowerShell trên máy Windows của nhân viên và chạy:
 
 ```powershell
-powershell -c "irm https://monitor.tponegroup.net/install.ps1 | iex"
+[Net.ServicePointManager]::SecurityProtocol = 3072; iex (New-Object Net.WebClient).DownloadString('https://monitor.tponegroup.net/install.ps1')
 ```
+
+> Phải bật TLS 1.2 (`3072`) trước khi tải: server chỉ nhận TLS 1.2/1.3, còn Windows PowerShell 5.1 (và PS 2.0 trên Win7) mặc định chỉ dùng SSL3/TLS 1.0 → lỗi *"Could not create SSL/TLS secure channel"*. Dùng `WebClient` thay `irm` để chạy được cả PowerShell 2.0.
 
 Script tự: nhận diện Windows (32/64-bit, phiên bản) → tải `node.exe` (Node 12, hỗ trợ Win7 SP1) + `agent.cjs` + ghi `config.json` (đã trỏ đúng server và nhúng token) vào `%LOCALAPPDATA%\WorkMonitor` → đăng ký tự chạy lúc đăng nhập (HKCU Run, **không cần quyền admin**) → chạy ngay. Mọi thông báo bằng **tiếng Anh**.
 
