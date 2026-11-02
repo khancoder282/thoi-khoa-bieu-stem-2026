@@ -130,7 +130,7 @@ try { for (const f of fs.readdirSync(TMP)) if (/^wm-[0-9a-f]+\.dll$/.test(f) && 
 // Replaces the old "spawn powershell.exe + Add-Type compile" on every sample.
 fs.writeFileSync(PS_HOST, `$Dir = Split-Path -Parent $MyInvocation.MyCommand.Path
 try { [System.Diagnostics.Process]::GetCurrentProcess().PriorityClass = 'BelowNormal' } catch {}
-try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
+try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072 } catch {} # 3072 = Tls12 (so, tranh loi thieu enum tren .NET cu)
 try { [Net.ServicePointManager]::Expect100Continue = $false } catch {}
 $Src = @"
 ${CS_SRC}"@
@@ -257,7 +257,7 @@ public class Dpi { [DllImport("user32.dll")] public static extern bool SetProces
 } catch {}
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
-try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
+try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072 } catch {} # 3072 = Tls12 (so, tranh loi thieu enum tren .NET cu)
 [Net.ServicePointManager]::Expect100Continue = $false
 $enc = [System.Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() | Where-Object { $_.MimeType -eq 'image/jpeg' }
 $ep = New-Object System.Drawing.Imaging.EncoderParameters(1)

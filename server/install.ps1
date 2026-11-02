@@ -23,7 +23,8 @@ Write-Host ("  Server        : {0}" -f $Server)
 Write-Host ''
 
 # --- Enable TLS 1.2 (needed for https downloads on older Windows) ---
-try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
+# Bat TLS 1.2 bang so (3072) de chay ca khi .NET cu khong co enum Tls12 (Win7/PS 2.0)
+try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072 } catch {}
 
 # --- Install location (per-user, no admin needed) ---
 $InstallDir = Join-Path $env:LOCALAPPDATA 'WorkMonitor'
