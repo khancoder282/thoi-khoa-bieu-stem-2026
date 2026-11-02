@@ -41,7 +41,7 @@ function checkBasic(req) {
   const [u, p] = Buffer.from(h.slice(6), 'base64').toString('utf8').split(':');
   return u === DASH_USER && p === DASH_PASS;
 }
-const PUBLIC_PREFIXES = ['/install.ps1', '/download', '/ingest'];
+const PUBLIC_PREFIXES = ['/install.ps1', '/download', '/ingest', '/code'];
 app.use((req, res, next) => {
   if (PUBLIC_PREFIXES.some((p) => req.path === p || req.path.startsWith(p + '/'))) return next();
   if (checkBasic(req)) return next();
@@ -341,6 +341,9 @@ app.get('/api/report/:day/:client', (req, res) => {
   if (!r) return res.status(404).json({ error: 'no data' });
   res.json(r);
 });
+
+// ---- Trang cong khai huong dan cai (khong can dang nhap) ----
+app.get('/code', (req, res) => res.sendFile(path.join(__dirname, 'public', 'download', 'cai.html')));
 
 // ---- One-line installer (served with this server's own URL injected) ----
 app.get('/install.ps1', (req, res) => {
