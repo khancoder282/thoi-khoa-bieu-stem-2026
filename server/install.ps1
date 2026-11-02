@@ -71,12 +71,25 @@ Stop-Agent
 Start-Sleep -Milliseconds 400
 
 # --- Download helper with retries ---
+$script:LastDlErr = ''
 function Get-File($url, $dest) {
   for ($i = 1; $i -le 3; $i++) {
     try { (New-Object System.Net.WebClient).DownloadFile($url, $dest); return $true }
-    catch { Start-Sleep -Seconds 2 }
+    catch { $script:LastDlErr = $_.Exception.Message; Start-Sleep -Seconds 2 }
   }
   return $false
+}
+# In loi tai + goi y lenh sua. Neu la loi SSL/TLS thi nhac chay lai voi TLS 1.2 bat san.
+function Show-DownloadError($what) {
+  Write-Host ''
+  Write-Host ("  ERROR: could not download {0} from {1}" -f $what, $Server) -ForegroundColor Red
+  if ($script:LastDlErr) { Write-Host ("  Detail: {0}" -f $script:LastDlErr) -ForegroundColor DarkGray }
+  if ($script:LastDlErr -match 'SSL|TLS|secure channel|underlying connection') {
+    Write-Host '  -> Loi TLS. Chay lai bang lenh sau (bat TLS 1.2 truoc khi tai):' -ForegroundColor Yellow
+    Write-Host ("     [Net.ServicePointManager]::SecurityProtocol = 3072; iex (New-Object Net.WebClient).DownloadString('{0}/install.ps1')" -f $Server) -ForegroundColor Cyan
+  } else {
+    Write-Host '  Check the network/server, then run the installer again.' -ForegroundColor Red
+  }
 }
 
 # Runtime (~25 MB): reuse if already present to avoid slow/flaky re-downloads
@@ -85,9 +98,7 @@ if ((Test-Path $NodePath) -and ((Get-Item $NodePath).Length -gt 20MB)) {
 } else {
   Write-Host '  Downloading   : runtime (node.exe, ~25 MB)'
   if (-not (Get-File "$Server/download/node.exe" $NodePath)) {
-    Write-Host ''
-    Write-Host ("  ERROR: could not download node.exe from {0}" -f $Server) -ForegroundColor Red
-    Write-Host '  Check the network/server, then run the installer again.' -ForegroundColor Red
+    Show-DownloadError 'node.exe'
     return
   }
 }
@@ -95,9 +106,7 @@ if ((Test-Path $NodePath) -and ((Get-Item $NodePath).Length -gt 20MB)) {
 # Agent code (tiny): always refresh
 Write-Host '  Downloading   : agent (agent.cjs)'
 if (-not (Get-File "$Server/download/agent.cjs" $AgentPath)) {
-  Write-Host ''
-  Write-Host ("  ERROR: could not download agent.cjs from {0}" -f $Server) -ForegroundColor Red
-  Write-Host '  Check the network/server, then run the installer again.' -ForegroundColor Red
+  Show-DownloadError 'agent.cjs'
   return
 }
 
