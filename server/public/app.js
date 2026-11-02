@@ -468,3 +468,28 @@ function renderDomains(r) {
 }
 
 refreshGridSub(); // tab Truc tiep la tab mac dinh
+
+// ---- Lenh cai agent len may nhan vien (hien tren dashboard de copy) ----
+// Bat TLS 1.2 (3072) truoc khi tai -> tranh loi "Could not create SSL/TLS secure channel" tren PowerShell cu.
+(function initInstall() {
+  const im = document.getElementById('installModal');
+  if (!im) return;
+  const cmd = `[Net.ServicePointManager]::SecurityProtocol = 3072; iex (New-Object Net.WebClient).DownloadString('${location.origin}/install.ps1')`;
+  const cmdEl = document.getElementById('installCmd');
+  if (cmdEl) cmdEl.textContent = cmd;
+  const open = () => im.classList.remove('hidden');
+  const close = () => im.classList.add('hidden');
+  const btn = document.getElementById('installBtn'); if (btn) btn.addEventListener('click', open);
+  const x = document.getElementById('installClose'); if (x) x.addEventListener('click', close);
+  im.addEventListener('click', (e) => { if (e.target === im) close(); });
+  const copy = document.getElementById('installCopy');
+  if (copy) copy.addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText(cmd); }
+    catch {
+      const r = document.createRange(); r.selectNodeContents(cmdEl);
+      const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r);
+      try { document.execCommand('copy'); } catch {} sel.removeAllRanges();
+    }
+    copy.textContent = 'Đã chép ✓'; setTimeout(() => (copy.textContent = 'Sao chép'), 1500);
+  });
+})();

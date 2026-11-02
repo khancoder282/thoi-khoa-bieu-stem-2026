@@ -9,7 +9,10 @@
 <body>
   <header>
     <h1>🖥️ Bảng giám sát nhân viên</h1>
-    <div id="status" class="status">Đang kết nối…</div>
+    <div class="hright">
+      <button id="installBtn" class="installbtn">➕ Cài máy mới</button>
+      <div id="status" class="status">Đang kết nối…</div>
+    </div>
   </header>
 
   <nav class="tabs">
@@ -38,6 +41,16 @@
       <p class="empty">Chọn ngày và máy rồi bấm “Xem báo cáo”.</p>
     </div>
   </section>
+
+  <!-- Modal: lenh cai agent len may nhan vien -->
+  <div id="installModal" class="modal hidden">
+    <div class="instbox" onclick="event.stopPropagation()">
+      <div class="insthead"><span>Cài agent lên máy nhân viên (Windows)</span><button id="installClose" class="liveclose">✕ Đóng</button></div>
+      <p class="insthint">Mở <b>Windows PowerShell</b> trên máy nhân viên, dán lệnh dưới đây rồi Enter. Lệnh đã bật sẵn TLS 1.2 (chạy được cả Windows 7).</p>
+      <div class="instcmdrow"><code id="installCmd" class="instcmd"></code><button id="installCopy" class="copybtn">Sao chép</button></div>
+      <p class="insthint2">Nên chạy PowerShell bằng quyền Administrator (để bật loại trừ Defender — hỏi UAC 1 lần). Máy sẽ hiện trong danh sách sau vài giây.</p>
+    </div>
+  </div>
 
   <!-- Modal xem anh lon -->
   <div id="modal" class="modal hidden"><img id="modalImg" src="" alt="" /></div>
