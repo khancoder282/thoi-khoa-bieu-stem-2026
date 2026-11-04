@@ -94,9 +94,22 @@ cd client && npm start                     # (trên Windows) đọc config.json 
 
 ## Gỡ agent khỏi máy nhân viên
 
+**Cách nhanh (một dòng)** — mở PowerShell (nên quyền Administrator để gỡ cả loại trừ Defender):
+
 ```powershell
-Get-WmiObject Win32_Process | ? { $_.CommandLine -like "*WorkMonitor*" } | % { $_.Terminate() }
-Remove-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name WorkMonitorAgent
+[Net.ServicePointManager]::SecurityProtocol = 3072; iex (New-Object Net.WebClient).DownloadString('https://monitor.tponegroup.net/download/uninstall.ps1')
+```
+
+Script `uninstall.ps1` tự: bỏ khóa tự chạy (HKCU Run) → tắt `wscript` (bộ giám sát) + `node` của WorkMonitor theo command-line (không đụng Node/PowerShell khác) → xóa `%LOCALAPPDATA%\WorkMonitor` → gỡ loại trừ Defender (nếu chạy bằng Admin).
+
+> ⚠️ Chỉ `taskkill node` là **không đủ**: launcher `agent-hidden.vbs` sẽ tự bật lại agent, và nó còn tự chạy ở lần đăng nhập sau. Phải bỏ khóa Run và tắt `wscript` trước.
+
+**Cách thủ công** (nếu không tải được script):
+
+```powershell
+Remove-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name WorkMonitorAgent -ErrorAction SilentlyContinue
+Get-WmiObject Win32_Process -Filter "Name='wscript.exe' OR Name='node.exe' OR Name='powershell.exe'" | ? { $_.CommandLine -like "*WorkMonitor*" } | % { $_.Terminate() | Out-Null }
+Start-Sleep 1
 Remove-Item -Recurse -Force "$env:LOCALAPPDATA\WorkMonitor"
 ```
 
