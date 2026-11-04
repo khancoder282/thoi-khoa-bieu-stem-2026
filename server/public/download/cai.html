@@ -21,6 +21,10 @@
     button:hover { background: #268050; }
     .note { color: #8b94a3; font-size: 12.5px; margin: 16px 0 0; line-height: 1.6; }
     .note b { color: #c3cad6; }
+    .sep { border: none; border-top: 1px solid #262a33; margin: 24px 0 20px; }
+    h2 { font-size: 16px; margin: 0 0 10px; color: #e7e9ee; }
+    .uninstall button { background: #7f1d1d; border-color: #a13434; color: #ffecec; }
+    .uninstall button:hover { background: #991b1b; }
   </style>
 </head>
 <body>
@@ -33,23 +37,37 @@
       <b>Vì sao có đoạn đầu dài?</b> Lệnh bật sẵn TLS 1.2 (số <code style="display:inline;padding:1px 5px">3072</code>) trước khi tải — nếu không, PowerShell cũ báo lỗi <i>“Could not create SSL/TLS secure channel”</i>.<br>
       Trình cài tự: tải Node + agent → ghi cấu hình → đăng ký tự chạy khi đăng nhập → chạy ngay. Hỏi UAC 1 lần để bật loại trừ Windows Defender (cho phép chụp màn hình). Máy sẽ hiện trong bảng giám sát sau vài giây.
     </p>
+
+    <hr class="sep" />
+    <div class="uninstall">
+      <h2>Gỡ agent khỏi máy</h2>
+      <p class="step">Mở <b>Windows PowerShell</b> (nên bằng quyền <b>Administrator</b>), dán lệnh sau rồi Enter:</p>
+      <div class="cmdrow"><code id="ucmd">Đang tạo lệnh…</code><button id="ucopy">Sao chép</button></div>
+      <p class="note">Gỡ sạch: bỏ khóa tự chạy → tắt bộ giám sát (wscript) + agent (node) của WorkMonitor → xóa thư mục cài → gỡ loại trừ Defender (nếu chạy bằng Admin). Máy sẽ chuyển <b>offline</b> sau ~90 giây.</p>
+    </div>
   </div>
   <script>
-    var cmd = "[Net.ServicePointManager]::SecurityProtocol = 3072; iex (New-Object Net.WebClient).DownloadString('" + location.origin + "/install.ps1')";
-    var cmdEl = document.getElementById('cmd');
-    cmdEl.textContent = cmd;
-    document.getElementById('copy').addEventListener('click', function () {
-      var btn = this;
-      function done() { btn.textContent = 'Đã chép ✓'; setTimeout(function () { btn.textContent = 'Sao chép'; }, 1500); }
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(cmd).then(done).catch(fallback);
-      } else fallback();
-      function fallback() {
-        var r = document.createRange(); r.selectNodeContents(cmdEl);
-        var s = getSelection(); s.removeAllRanges(); s.addRange(r);
-        try { document.execCommand('copy'); } catch (e) {} s.removeAllRanges(); done();
-      }
-    });
+    var tls = "[Net.ServicePointManager]::SecurityProtocol = 3072; iex (New-Object Net.WebClient).DownloadString('";
+    var installCmd = tls + location.origin + "/install.ps1')";
+    var uninstallCmd = tls + location.origin + "/download/uninstall.ps1')";
+    document.getElementById('cmd').textContent = installCmd;
+    document.getElementById('ucmd').textContent = uninstallCmd;
+
+    function wireCopy(btnId, cmdElId, cmd) {
+      var btn = document.getElementById(btnId), cmdEl = document.getElementById(cmdElId);
+      btn.addEventListener('click', function () {
+        function done() { btn.textContent = 'Đã chép ✓'; setTimeout(function () { btn.textContent = 'Sao chép'; }, 1500); }
+        function fallback() {
+          var r = document.createRange(); r.selectNodeContents(cmdEl);
+          var s = getSelection(); s.removeAllRanges(); s.addRange(r);
+          try { document.execCommand('copy'); } catch (e) {} s.removeAllRanges(); done();
+        }
+        if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(cmd).then(done).catch(fallback);
+        else fallback();
+      });
+    }
+    wireCopy('copy', 'cmd', installCmd);
+    wireCopy('ucopy', 'ucmd', uninstallCmd);
   </script>
 </body>
 </html>
